@@ -1,0 +1,34 @@
+# VisuMark Agent Configuration
+
+vlm:
+  provider: openai           # openai | qwen | local
+  model: gpt-4o              # gpt-4o | gpt-4-vision-preview | qwen-vl-max
+  api_key: ${OPENAI_API_KEY}  # env variable
+  base_url: null
+  max_tokens: 4096
+  temperature: 0.0
+  timeout: 60
+
+environment:
+  headless: true
+  viewport_width: 1280
+  viewport_height: 720
+  timeout: 30000       # ms per action
+
+som:
+  enabled: true
+  label_font_size: 14
+  bounding_box_color: "#FF0000"
+  show_labels: true
+  max_elements: 50
+
+agent:
+  max_steps: 30
+  step_timeout: 60        # seconds
+  retry_on_error: true
+  max_retries: 3
+  screenshot_dir: ./data/screenshots
+
+evaluation:
+  metrics: [element_accuracy, step_success_rate, task_success_rate]
+  output_dir: ./data/results

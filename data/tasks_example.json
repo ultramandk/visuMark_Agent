@@ -1,0 +1,12 @@
+[
+    {
+        "id": 1,
+        "description": "Search for 'machine learning' on Google and report the number of results shown",
+        "url": "https://www.google.com"
+    },
+    {
+        "id": 2,
+        "description": "Go to Wikipedia and find the first paragraph of the article about 'Web scraping'",
+        "url": "https://en.wikipedia.org"
+    }
+]
