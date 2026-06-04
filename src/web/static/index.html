@@ -9,19 +9,19 @@
 <body>
     <div class="app">
         <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
+        <aside class="sidebar" id="sidebar" aria-label="侧边栏">
             <div class="sidebar-header">
                 <h1 class="logo">VisuMark Agent</h1>
                 <span class="badge">VLM + SoM</span>
             </div>
             <div class="sidebar-body">
-                <button class="btn-new-task" id="btn-new-task">+ 新任务</button>
+                <button class="btn-new-task" id="btn-new-task" title="开始一个新任务">+ 新任务</button>
                 <div class="history-list" id="history-list">
                     <p class="hint">暂无历史记录</p>
                 </div>
             </div>
             <div class="sidebar-footer">
-                <span class="status-dot" id="status-dot"></span>
+                <span class="status-dot" id="status-dot" aria-label="连接状态"></span>
                 <span id="status-text">就绪</span>
             </div>
         </aside>
@@ -29,20 +29,37 @@
         <!-- Main Chat Area -->
         <main class="main">
             <header class="chat-header">
-                <button class="btn-toggle-sidebar" id="btn-toggle-sidebar" title="切换侧边栏">☰</button>
+                <button class="btn-toggle-sidebar" id="btn-toggle-sidebar" title="切换侧边栏" aria-label="切换侧边栏">☰</button>
                 <h2>Agent 对话</h2>
             </header>
 
+            <!-- Messages Container -->
             <div class="chat-messages" id="chat-messages">
-                <div class="welcome-message">
+                <!-- Welcome Screen -->
+                <div class="welcome-message" id="welcome-message">
                     <div class="welcome-icon">🤖</div>
                     <h3>欢迎使用 VisuMark Agent</h3>
                     <p>在下方输入任务描述和目标网址，Agent 将使用视觉语言模型自动操控浏览器完成任务。</p>
                     <div class="welcome-examples">
                         <h4>示例任务</h4>
-                        <button class="example-chip" data-task="打开 Hacker News 并告诉我今天的头条新闻是什么" data-url="https://news.ycombinator.com">📰 Hacker News 头条</button>
-                        <button class="example-chip" data-task="搜索从北京到上海的航班" data-url="https://www.google.com/travel/flights">✈️ 搜索航班</button>
-                        <button class="example-chip" data-task="这个页面的标题是什么？" data-url="https://example.com">📄 读取页面标题</button>
+                        <button class="example-chip" data-task="打开 Hacker News 并告诉我今天的头条新闻是什么" data-url="https://news.ycombinator.com">
+                            📰 Hacker News 头条
+                        </button>
+                        <button class="example-chip" data-task="搜索从北京到上海的航班" data-url="https://www.google.com/travel/flights">
+                            ✈️ 搜索航班
+                        </button>
+                        <button class="example-chip" data-task="这个页面的标题是什么？" data-url="https://example.com">
+                            📄 读取页面标题
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Typing Indicator -->
+                <div class="typing-indicator" id="typing-indicator">
+                    <div class="bubble">
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
                     </div>
                 </div>
             </div>
@@ -56,42 +73,48 @@
                             placeholder="描述你想要完成的任务，例如：搜索从北京到上海的航班..."
                             rows="2"
                             autofocus
+                            aria-label="任务描述"
                         ></textarea>
-                        <button class="btn-send" id="btn-send" title="执行任务">▶</button>
+                        <button class="btn-send" id="btn-send" title="执行任务 (Enter)" aria-label="发送">▶</button>
                     </div>
                     <div class="input-row-secondary">
-                        <input
-                            type="url"
-                            id="url-input"
-                            placeholder="目标网址 https://..."
-                            value="https://example.com"
-                        />
-                        <button class="btn-advanced" id="btn-advanced" title="高级设置">⚙</button>
+                        <div class="url-input-wrapper">
+                            <input
+                                type="url"
+                                id="url-input"
+                                placeholder="目标网址 https://..."
+                                value="https://example.com"
+                                aria-label="目标网址"
+                            />
+                        </div>
+                        <button class="btn-advanced" id="btn-advanced" title="高级设置" aria-label="高级设置">⚙</button>
                     </div>
 
                     <!-- Advanced Settings (collapsible) -->
                     <div class="advanced-settings hidden" id="advanced-settings">
-                        <div class="settings-grid">
-                            <label>
-                                模型
-                                <input type="text" id="setting-model" value="gpt-4o" placeholder="gpt-4o" />
-                            </label>
-                            <label>
-                                API Key
-                                <input type="password" id="setting-api-key" placeholder="使用环境变量 OPENAI_API_KEY" />
-                            </label>
-                            <label>
-                                API Base URL
-                                <input type="text" id="setting-base-url" placeholder="https://api.openai.com/v1" />
-                            </label>
-                            <label>
-                                最大步数
-                                <input type="number" id="setting-max-steps" value="30" min="1" max="100" />
-                            </label>
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="setting-headless" checked />
-                                无头模式（后台运行浏览器）
-                            </label>
+                        <div class="advanced-settings-inner">
+                            <div class="settings-grid">
+                                <label>
+                                    模型
+                                    <input type="text" id="setting-model" value="gpt-4o" placeholder="gpt-4o" />
+                                </label>
+                                <label>
+                                    API Key
+                                    <input type="password" id="setting-api-key" placeholder="使用环境变量 OPENAI_API_KEY" />
+                                </label>
+                                <label>
+                                    API Base URL
+                                    <input type="text" id="setting-base-url" placeholder="https://api.openai.com/v1" />
+                                </label>
+                                <label>
+                                    最大步数
+                                    <input type="number" id="setting-max-steps" value="30" min="1" max="100" />
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="setting-headless" checked />
+                                    无头模式（后台运行浏览器）
+                                </label>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -99,10 +122,13 @@
         </main>
 
         <!-- Screenshot Lightbox -->
-        <div class="lightbox hidden" id="lightbox">
-            <button class="lightbox-close" id="lightbox-close">✕</button>
+        <div class="lightbox hidden" id="lightbox" aria-label="截图查看器">
+            <button class="lightbox-close" id="lightbox-close" aria-label="关闭">✕</button>
             <img id="lightbox-img" src="" alt="截图" />
         </div>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toast-container"></div>
     </div>
 
     <script src="/static/app.js"></script>

@@ -60,6 +60,89 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
+# SoM Tree — standalone element extraction
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel
+
+
+class SoMElementOut(BaseModel):
+    id: int
+    tag: str
+    text: str
+    bbox: tuple[float, float, float, float]
+
+
+class SoMTreeResponse(BaseModel):
+    url: str
+    title: str
+    viewport: dict[str, int]
+    elements: list[SoMElementOut]
+    total_elements: int
+    annotated_screenshot: str | None = None  # base64 PNG (only when annotate=true)
+
+
+@app.get("/api/som-tree")
+async def som_tree(
+    url: str = "https://example.com",
+    annotate: bool = True,
+    max_elements: int = 50,
+    headless: bool = True,
+):
+    """Extract the Set-of-Mark element tree for any web page.
+
+    Args:
+        url: Target page URL.
+        annotate: If true, return an annotated screenshot with bounding boxes.
+        max_elements: Maximum number of interactive elements to extract.
+        headless: Run browser in headless mode.
+    """
+    from visumark_agent.som.extractor import ElementExtractor
+    from visumark_agent.som.marker import SoMMarker
+
+    browser = BrowserEnv(headless=headless, viewport=(1280, 720))
+    extractor = ElementExtractor(max_elements=min(max_elements, 100))
+    marker = SoMMarker()
+
+    try:
+        await browser.start()
+        await browser.goto(url)
+
+        page = browser.page
+        title = await page.title() if page else url
+
+        elements = await extractor.extract(page)
+        elements_out = [
+            SoMElementOut(
+                id=e.id,
+                tag=e.tag,
+                text=e.text,
+                bbox=e.bbox,
+            )
+            for e in elements
+        ]
+
+        annotated_b64: str | None = None
+        if annotate:
+            screenshot_bytes = await browser.screenshot()
+            vw = browser.viewport["width"]
+            vh = browser.viewport["height"]
+            annotated_bytes = marker.annotate(screenshot_bytes, elements, vw, vh)
+            annotated_b64 = base64.b64encode(annotated_bytes).decode("utf-8")
+
+        return {
+            "url": url,
+            "title": title,
+            "viewport": {"width": browser.viewport["width"], "height": browser.viewport["height"]},
+            "elements": [e.model_dump() for e in elements_out],
+            "total_elements": len(elements_out),
+            "annotated_screenshot": annotated_b64,
+        }
+
+    finally:
+        await browser.stop()
+
+
+# ---------------------------------------------------------------------------
 # WebSocket — Agent Runner
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/agent")

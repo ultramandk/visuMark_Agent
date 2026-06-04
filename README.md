@@ -83,7 +83,7 @@ set OPENAI_API_KEY=sk-...
 
 ## 使用方式一：Web UI（推荐）
 
-提供聊天式交互界面，可实时查看 Agent 每一步的截图、动作与推理过程。
+提供**玻璃态暗色主题**聊天式交互界面，可实时查看 Agent 每一步的截图、动作与推理过程。前端支持 WebSocket 自动重连、Toast 通知、打字指示器、键盘快捷键等交互增强。
 
 ### 启动 Web 服务
 
@@ -100,6 +100,8 @@ python scripts/run_web.py --port 8080 --host 127.0.0.1 --reload
 | `--port` / `-p` | 绑定端口 | `8000` |
 | `--reload` | 开发模式自动重载 | 关闭 |
 
+启动后访问 `http://localhost:8000`，API 文档见 `http://localhost:8000/docs`。
+
 ### 使用界面
 
 1. 浏览器打开 `http://localhost:8000`
@@ -107,11 +109,10 @@ python scripts/run_web.py --port 8080 --host 127.0.0.1 --reload
 3. 输入目标网址，例如：`https://www.google.com/travel/flights`
 4. 点击发送按钮 **▶**（或按 `Enter`），Agent 开始执行
 5. 每一步都会实时展示：
-   - 📍 步骤编号
-   - 🎯 执行的动作（点击/输入/滚动等）
+   - 📍 步骤编号 + 🎯 动作标签（点击/输入/滚动等）
    - 🖼️ 带 SoM 标注的截图（点击可放大）
-   - 💬 VLM 原始输出
-6. 任务完成后显示最终结果
+   - 💬 VLM 原始输出（折叠面板）
+6. 任务完成后显示最终结果 + 总步数
 
 ### 高级设置
 
@@ -125,7 +126,80 @@ python scripts/run_web.py --port 8080 --host 127.0.0.1 --reload
 | 最大步数 | 单次任务最多执行步数 | `30` |
 | 无头模式 | 后台运行浏览器（不显示窗口） | ✅ |
 
-> 所有高级设置会自动保存到浏览器 `localStorage`，下次打开无需重新填写。
+> 所有高级设置会自动保存到浏览器 `localStorage`，侧边栏折叠状态也会持久化。
+
+### 键盘快捷键
+
+| 快捷键 | 操作 |
+|--------|------|
+| `Enter` | 发送任务 |
+| `Ctrl` + `Enter` | 发送任务 |
+| `Ctrl` + `K` | 聚焦任务输入框 |
+| `Ctrl` + `B` | 切换侧边栏 |
+| `Escape` | 关闭截图灯箱 |
+
+---
+
+## SoM 树独立 API
+
+除了通过 Agent 任务流程使用 SoM 之外，也可以**直接调用 API 提取任意网页的 SoM 元素树和标注截图**，无需启动完整 Agent。
+
+### 端点
+
+```
+GET /api/som-tree?url=<网址>&annotate=<true|false>&max_elements=<N>&headless=<true|false>
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `url` | string | `https://example.com` | 目标网页地址 |
+| `annotate` | bool | `true` | 是否返回带编号边界框的标注截图 |
+| `max_elements` | int | `50` | 最多提取的可交互元素数量（上限 100） |
+| `headless` | bool | `true` | 是否使用无头浏览器 |
+
+### 返回格式
+
+```json
+{
+  "url": "https://example.com",
+  "title": "Example Domain",
+  "viewport": { "width": 1280, "height": 720 },
+  "elements": [
+    {
+      "id": 1,
+      "tag": "a",
+      "text": "More information...",
+      "bbox": [0.15, 0.42, 0.18, 0.04]
+    }
+  ],
+  "total_elements": 12,
+  "annotated_screenshot": "iVBORw0KGgo... (base64 PNG)"
+}
+```
+
+每个元素字段说明：
+
+| 字段 | 说明 |
+|------|------|
+| `id` | 元素编号（对应 SoM 截图中标注的数字） |
+| `tag` | HTML 标签（button, a, input, select, textarea 等） |
+| `text` | 可见文本或 aria-label / placeholder（最多 80 字符） |
+| `bbox` | 归一化边界框 `(x, y, width, height)`，值域 0~1 |
+
+### 使用示例
+
+```bash
+# 获取 HN 首页的 SoM 树 + 标注截图
+curl "http://localhost:8000/api/som-tree?url=https://news.ycombinator.com" | python -m json.tool
+
+# 仅获取元素列表，不返回截图
+curl "http://localhost:8000/api/som-tree?url=https://example.com&annotate=false"
+
+# 限制最多 10 个元素
+curl "http://localhost:8000/api/som-tree?url=https://github.com&max_elements=10"
+```
+
+也可以在浏览器中直接打开 Swagger 文档进行交互式测试：`http://localhost:8000/docs`
 
 ---
 
