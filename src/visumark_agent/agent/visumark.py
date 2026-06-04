@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -83,6 +84,7 @@ class VisuMarkAgent:
         start_url: str,
         *,
         output_dir: str | Path | None = None,
+        step_callback: Callable[["StepResult", bytes], Awaitable[None]] | None = None,
     ) -> TaskResult:
         """Execute a task end-to-end.
 
@@ -90,6 +92,8 @@ class VisuMarkAgent:
             task: Natural-language task description (e.g. "Search for flights to Paris").
             start_url: The starting URL.
             output_dir: If set, save step screenshots here for debugging.
+            step_callback: Optional async callback invoked after each step with
+                the StepResult and the annotated screenshot bytes.
 
         Returns:
             TaskResult with the outcome and step history.
@@ -104,12 +108,15 @@ class VisuMarkAgent:
 
             for step in range(1, self.max_steps + 1):
                 logger.info(f"--- Step {step}/{self.max_steps} ---")
-                step_result = await self._execute_step(
+                step_result, screenshot_bytes = await self._execute_step(
                     step=step,
                     task=task,
                     screenshot_dir=screenshot_dir,
                 )
                 result.steps.append(step_result)
+
+                if step_callback:
+                    await step_callback(step_result, screenshot_bytes)
 
                 if step_result.action is None:
                     result.error = "Failed to produce a valid action"
@@ -143,11 +150,16 @@ class VisuMarkAgent:
         step: int,
         task: str,
         screenshot_dir: Path,
-    ) -> StepResult:
-        """Run a single observe→reason→act cycle."""
+    ) -> tuple[StepResult, bytes]:
+        """Run a single observe→reason→act cycle.
+
+        Returns:
+            Tuple of (StepResult, annotated_screenshot_bytes).
+        """
         page = self.browser.page
+        empty_screenshot = b""
         if page is None:
-            return StepResult(step=step, action=None, observation="No page", success=False)
+            return StepResult(step=step, action=None, observation="No page", success=False), empty_screenshot
 
         # 1. tag DOM for later targeting
         await self.browser.tag_elements()
@@ -189,21 +201,27 @@ class VisuMarkAgent:
                     break
 
         if action is None:
-            return StepResult(
-                step=step,
-                action=None,
-                observation=vlm_output,
-                vlm_output=vlm_output,
-                success=False,
+            return (
+                StepResult(
+                    step=step,
+                    action=None,
+                    observation=vlm_output,
+                    vlm_output=vlm_output,
+                    success=False,
+                ),
+                annotated,
             )
 
         # 4. execute action
         success = await self.browser.execute(action)
 
-        return StepResult(
-            step=step,
-            action=action,
-            observation=vlm_output,
-            vlm_output=vlm_output,
-            success=success,
+        return (
+            StepResult(
+                step=step,
+                action=action,
+                observation=vlm_output,
+                vlm_output=vlm_output,
+                success=success,
+            ),
+            annotated,
         )
