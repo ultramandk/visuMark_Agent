@@ -208,6 +208,8 @@ async def ws_agent(ws: WebSocket):
             "description": action_data.get("description", ""),
             "vlm_output": step_result.vlm_output[:2000],  # truncate long outputs
             "screenshot": b64_screenshot,
+            "target_bbox": list(step_result.target_bbox) if step_result.target_bbox else None,
+            "target_label": step_result.target_label,
             "success": step_result.success,
         })
 

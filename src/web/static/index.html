@@ -26,10 +26,30 @@
             </div>
         </aside>
 
+        <!-- Screenshot Panel -->
+        <section class="screenshot-panel" id="screenshot-panel" aria-label="截图面板">
+            <div class="screenshot-panel-header">
+                <h3>📷 实时截图</h3>
+                <span class="step-badge" id="screenshot-step-badge">等待中</span>
+            </div>
+            <div class="screenshot-container" id="screenshot-container">
+                <div class="screenshot-placeholder" id="screenshot-placeholder">
+                    <span class="placeholder-icon">🖥️</span>
+                    <p>截图将在这里显示</p>
+                </div>
+                <img id="screenshot-img" src="" alt="当前页面截图" style="display:none" />
+                <canvas id="screenshot-overlay" style="display:none"></canvas>
+            </div>
+            <div class="action-overlay-info" id="action-overlay-info">
+                <span class="action-info-label">等待操作...</span>
+            </div>
+        </section>
+
         <!-- Main Chat Area -->
         <main class="main">
             <header class="chat-header">
                 <button class="btn-toggle-sidebar" id="btn-toggle-sidebar" title="切换侧边栏" aria-label="切换侧边栏">☰</button>
+                <button class="btn-toggle-screenshot" id="btn-toggle-screenshot" title="切换截图面板" aria-label="切换截图面板">🖼️</button>
                 <h2>Agent 对话</h2>
             </header>
 

@@ -24,6 +24,8 @@ class StepResult:
 
     step: int
     action: Action | None
+    target_bbox: tuple[float, float, float, float] | None = None  # (x, y, w, h) normalized
+    target_label: str = ""  # e.g. "CLICK #5" or "TYPE 'search' → #3"
     observation: str = ""
     vlm_output: str = ""
     success: bool = False
@@ -212,13 +214,30 @@ class VisuMarkAgent:
                 annotated,
             )
 
-        # 4. execute action
+        # 4. resolve target element bbox & build label
+        target_bbox: tuple[float, float, float, float] | None = None
+        target_label = ""
+        if action and action.element_id is not None:
+            for elem in elements:
+                if elem.id == action.element_id:
+                    target_bbox = elem.bbox
+                    break
+            if target_bbox:
+                action_name = action.action_type.value.upper()
+                if action.value:
+                    target_label = f"{action_name} '{action.value}' → #{action.element_id}"
+                else:
+                    target_label = f"{action_name} #{action.element_id}"
+
+        # 5. execute action
         success = await self.browser.execute(action)
 
         return (
             StepResult(
                 step=step,
                 action=action,
+                target_bbox=target_bbox,
+                target_label=target_label,
                 observation=vlm_output,
                 vlm_output=vlm_output,
                 success=success,
