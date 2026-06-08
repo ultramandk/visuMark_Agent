@@ -18,7 +18,16 @@ def _get_font(size: int = 14) -> FreeTypeFont:
 
     import sys
     if sys.platform == "win32":
-        candidates = ["arial.ttf", "segoeui.ttf", "consola.ttf"]
+        # Use absolute paths to Windows system fonts
+        font_dir = "C:/Windows/Fonts"
+        candidates = [
+            f"{font_dir}/segoeui.ttf",
+            f"{font_dir}/segoeuib.ttf",
+            f"{font_dir}/arial.ttf",
+            f"{font_dir}/arialbd.ttf",
+            f"{font_dir}/consola.ttf",
+            f"{font_dir}/consolab.ttf",
+        ]
     else:
         candidates = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",

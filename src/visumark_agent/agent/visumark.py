@@ -163,12 +163,13 @@ class VisuMarkAgent:
         if page is None:
             return StepResult(step=step, action=None, observation="No page", success=False), empty_screenshot
 
-        # 1. tag DOM for later targeting
-        await self.browser.tag_elements()
+        # 1. extract interactive elements & tag DOM in one pass
+        #    tag_dom=True ensures data-som-id attributes match the
+        #    numbers drawn on the screenshot exactly.
+        elements = await self.extractor.extract(page, tag_dom=True)
 
         # 2. screenshot & SoM annotation
         raw_screenshot = await self.browser.screenshot()
-        elements = await self.extractor.extract(page)
         vw = self.browser.viewport["width"]
         vh = self.browser.viewport["height"]
         annotated = self.marker.annotate(raw_screenshot, elements, vw, vh)

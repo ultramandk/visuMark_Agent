@@ -25,11 +25,18 @@ class ElementExtractor:
         "[onclick], [tabindex]"
     )
 
-    def __init__(self, max_elements: int = 50):
+    def __init__(self, max_elements: int = 200):
         self.max_elements = max_elements
 
-    async def extract(self, page) -> list[PageElement]:
-        """Extract interactive elements visible on the current page."""
+    async def extract(self, page, *, tag_dom: bool = True) -> list[PageElement]:
+        """Extract interactive elements visible on the current page.
+
+        Args:
+            page: Playwright Page object.
+            tag_dom: If True, annotate each extracted element in the DOM with
+                ``data-som-id`` so that later actions (click/type) can target
+                the same element using the ID shown on the screenshot.
+        """
         viewport = page.viewport_size or {"width": 1280, "height": 720}
         vw, vh = viewport["width"], viewport["height"]
 
@@ -55,8 +62,16 @@ class ElementExtractor:
                     "el => el.textContent?.trim()?.slice(0, 80) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || ''"
                 )
 
+                element_id = idx + 1
+
+                # Tag the DOM element so browser actions can target it
+                if tag_dom:
+                    await handle.evaluate(
+                        f"el => el.setAttribute('data-som-id', '{element_id}')"
+                    )
+
                 elements.append(PageElement(
-                    id=idx + 1,
+                    id=element_id,
                     tag=tag,
                     text=text,
                     bbox=(box["x"] / vw, box["y"] / vh, box["width"] / vw, box["height"] / vh),

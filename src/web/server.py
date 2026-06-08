@@ -85,7 +85,7 @@ class SoMTreeResponse(BaseModel):
 async def som_tree(
     url: str = "https://example.com",
     annotate: bool = True,
-    max_elements: int = 50,
+    max_elements: int = 200,
     headless: bool = True,
 ):
     """Extract the Set-of-Mark element tree for any web page.
@@ -100,7 +100,7 @@ async def som_tree(
     from visumark_agent.som.marker import SoMMarker
 
     browser = BrowserEnv(headless=headless, viewport=(1280, 720))
-    extractor = ElementExtractor(max_elements=min(max_elements, 100))
+    extractor = ElementExtractor(max_elements=min(max_elements, 500))
     marker = SoMMarker()
 
     try:
@@ -110,7 +110,7 @@ async def som_tree(
         page = browser.page
         title = await page.title() if page else url
 
-        elements = await extractor.extract(page)
+        elements = await extractor.extract(page, tag_dom=False)  # read-only, no DOM tagging needed
         elements_out = [
             SoMElementOut(
                 id=e.id,
