@@ -115,20 +115,29 @@
                         <div class="advanced-settings-inner">
                             <div class="settings-grid">
                                 <label>
+                                    供应商
+                                    <select id="setting-provider">
+                                        <option value="qwen">通义千问 (DashScope API)</option>
+                                        <option value="openai">OpenAI (GPT-4V/4o)</option>
+                                        <option value="anthropic">Anthropic (Claude)</option>
+                                        <option value="local">本地模型 (Ollama/vLLM)</option>
+                                    </select>
+                                </label>
+                                <label>
                                     模型
-                                    <input type="text" id="setting-model" value="gpt-4o" placeholder="gpt-4o" />
+                                    <input type="text" id="setting-model" value="qwen3-vl-8b-instruct" placeholder="qwen3-vl-8b-instruct" />
                                 </label>
                                 <label>
                                     API Key
-                                    <input type="password" id="setting-api-key" placeholder="使用环境变量 OPENAI_API_KEY" />
+                                    <input type="password" id="setting-api-key" placeholder="API Key（已配置则留空）" />
                                 </label>
                                 <label>
                                     API Base URL
-                                    <input type="text" id="setting-base-url" placeholder="https://api.openai.com/v1" />
+                                    <input type="text" id="setting-base-url" placeholder="自动根据供应商填充" />
                                 </label>
                                 <label>
                                     最大步数
-                                    <input type="number" id="setting-max-steps" value="30" min="1" max="100" />
+                                    <input type="number" id="setting-max-steps" value="15" min="1" max="50" />
                                 </label>
                                 <label class="checkbox-label">
                                     <input type="checkbox" id="setting-headless" checked />

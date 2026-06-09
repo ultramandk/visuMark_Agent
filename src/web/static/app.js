@@ -60,6 +60,7 @@ function getTypingIndicator() {
 }
 
 // Settings inputs
+const settingProvider = $("#setting-provider");
 const settingModel = $("#setting-model");
 const settingApiKey = $("#setting-api-key");
 const settingBaseUrl = $("#setting-base-url");
@@ -140,14 +141,31 @@ function toast(message, type) {
 // Settings Persistence
 // ============================================================================
 
+// Provider defaults — auto-fill model and base URL when switching
+const PROVIDER_DEFAULTS = {
+    qwen:    { model: "qwen3-vl-8b-instruct", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    openai:  { model: "gpt-4o",               baseUrl: "https://api.openai.com/v1" },
+    anthropic:{ model: "claude-sonnet-4-6",   baseUrl: "https://api.anthropic.com" },
+    local:   { model: "qwen3-vl:8b",          baseUrl: "http://localhost:11434/v1" },
+};
+
+function onProviderChange() {
+    const p = settingProvider.value;
+    const defs = PROVIDER_DEFAULTS[p] || PROVIDER_DEFAULTS.qwen;
+    settingModel.value = defs.model;
+    settingBaseUrl.value = defs.baseUrl;
+    saveSettings();
+}
+
 function loadSettings() {
     try {
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
         if (saved) {
-            settingModel.value = saved.model || "gpt-4o";
+            settingProvider.value = saved.provider || "qwen";
+            settingModel.value = saved.model || "qwen3-vl-8b-instruct";
             settingApiKey.value = saved.apiKey || "";
             settingBaseUrl.value = saved.baseUrl || "";
-            settingMaxSteps.value = saved.maxSteps || 30;
+            settingMaxSteps.value = saved.maxSteps || 15;
             settingHeadless.checked = saved.headless !== false;
         }
     } catch { /* ignore */ }
@@ -155,10 +173,11 @@ function loadSettings() {
 
 function saveSettings() {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        provider: settingProvider.value,
         model: settingModel.value,
         apiKey: settingApiKey.value,
         baseUrl: settingBaseUrl.value,
-        maxSteps: parseInt(settingMaxSteps.value, 10) || 30,
+        maxSteps: parseInt(settingMaxSteps.value, 10) || 15,
         headless: settingHeadless.checked,
     }));
 }
@@ -453,10 +472,11 @@ function buildTaskConfig(task, url) {
     return {
         task,
         url,
-        model: settingModel.value || "gpt-4o",
+        provider: settingProvider.value || "qwen",
+        model: settingModel.value || PROVIDER_DEFAULTS[settingProvider.value]?.model || "qwen3-vl-8b-instruct",
         api_key: getApiKey(),
         base_url: settingBaseUrl.value.trim() || null,
-        max_steps: parseInt(settingMaxSteps.value, 10) || 30,
+        max_steps: parseInt(settingMaxSteps.value, 10) || 15,
         headless: settingHeadless.checked,
     };
 }
@@ -745,8 +765,11 @@ function bindExampleChip(chip) {
 }
 $$(".example-chip").forEach(bindExampleChip);
 
+// Provider change → auto-fill model + base URL
+settingProvider.addEventListener("change", onProviderChange);
+
 // Auto-save settings on change
-[settingModel, settingApiKey, settingBaseUrl, settingMaxSteps, settingHeadless].forEach((el) => {
+[settingProvider, settingModel, settingApiKey, settingBaseUrl, settingMaxSteps, settingHeadless].forEach((el) => {
     el.addEventListener("change", saveSettings);
     if (el.tagName === "INPUT" && el.type !== "checkbox") {
         el.addEventListener("blur", saveSettings);

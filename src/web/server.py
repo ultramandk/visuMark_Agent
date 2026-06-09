@@ -1,9 +1,12 @@
 """FastAPI backend for VisuMark Agent Web UI.
 
 Provides:
-- WebSocket /ws/agent for real-time step streaming
-- Static file serving for the frontend
-- Health check endpoint
+    - WebSocket /ws/agent for real-time step streaming
+    - Static file serving for the frontend (unchanged)
+    - REST API endpoints: health, som-tree
+
+The frontend (static/index.html, app.js, style.css) is preserved as-is.
+This backend maintains the same WebSocket protocol expected by the frontend.
 """
 
 import base64
@@ -14,23 +17,23 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
-# Allow importing visumark_agent from repo root
+# Ensure visumark package is importable
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from visumark_agent import VisuMarkAgent, OpenAIVLM, BrowserEnv, SoMMarker, load_config
-from visumark_agent.agent.visumark import StepResult
-from visumark_agent.environment.actions import ActionType
-from visumark_agent.utils.logging import setup_logger
+from visumark.core.types import StepRecord, ActionType
+from visumark.perception.dom_bridge import DOMBridge
+from visumark.utils.logging import setup_logger
 
-app = FastAPI(title="VisuMark Agent Web UI", version="0.1.0")
+setup_logger(level="INFO")
+
+app = FastAPI(title="VisuMark Agent Web UI", version="0.2.0")
 
 # ---------------------------------------------------------------------------
-# Static files
+# Static files (frontend — PRESERVED AS-IS)
 # ---------------------------------------------------------------------------
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,9 +45,9 @@ async def index():
     return FileResponse(_STATIC_DIR / "index.html")
 
 
-# Mount static assets (CSS, JS) at /static/...
 @app.get("/static/{filename:path}")
 async def static_file(filename: str):
+    """Serve static assets (CSS, JS)."""
     file_path = _STATIC_DIR / filename
     if not file_path.resolve().is_relative_to(_STATIC_DIR.resolve()):
         return FileResponse(_STATIC_DIR / "index.html", status_code=403)
@@ -60,7 +63,7 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
-# SoM Tree — standalone element extraction
+# SoM Tree — standalone element extraction API
 # ---------------------------------------------------------------------------
 from pydantic import BaseModel
 
@@ -72,69 +75,48 @@ class SoMElementOut(BaseModel):
     bbox: tuple[float, float, float, float]
 
 
-class SoMTreeResponse(BaseModel):
-    url: str
-    title: str
-    viewport: dict[str, int]
-    elements: list[SoMElementOut]
-    total_elements: int
-    annotated_screenshot: str | None = None  # base64 PNG (only when annotate=true)
-
-
 @app.get("/api/som-tree")
 async def som_tree(
     url: str = "https://example.com",
     annotate: bool = True,
-    max_elements: int = 200,
+    max_elements: int = 50,
     headless: bool = True,
 ):
-    """Extract the Set-of-Mark element tree for any web page.
+    """Extract Set-of-Mark element tree for any web page.
 
-    Args:
-        url: Target page URL.
-        annotate: If true, return an annotated screenshot with bounding boxes.
-        max_elements: Maximum number of interactive elements to extract.
-        headless: Run browser in headless mode.
+    Returns elements + optional annotated screenshot.
     """
-    from visumark_agent.som.extractor import ElementExtractor
-    from visumark_agent.som.marker import SoMMarker
+    from visumark.environment.live_env import LiveEnvironment
+    from visumark.perception.element_extractor import ElementExtractor
+    from visumark.perception.som_marker import SoMMarker
 
-    browser = BrowserEnv(headless=headless, viewport=(1280, 720))
-    extractor = ElementExtractor(max_elements=min(max_elements, 500))
+    browser = LiveEnvironment(headless=headless, viewport=(1280, 720))
+    extractor = ElementExtractor(max_elements=min(max_elements, 100))
     marker = SoMMarker()
 
     try:
-        await browser.start()
-        await browser.goto(url)
-
+        await browser.start(url)
         page = browser.page
         title = await page.title() if page else url
 
-        elements = await extractor.extract(page, tag_dom=False)  # read-only, no DOM tagging needed
-        elements_out = [
-            SoMElementOut(
-                id=e.id,
-                tag=e.tag,
-                text=e.text,
-                bbox=e.bbox,
-            )
-            for e in elements
-        ]
+        elements = await extractor.extract(page)
 
         annotated_b64: str | None = None
         if annotate:
             screenshot_bytes = await browser.screenshot()
-            vw = browser.viewport["width"]
-            vh = browser.viewport["height"]
-            annotated_bytes = marker.annotate(screenshot_bytes, elements, vw, vh)
+            vp = browser.get_viewport()
+            annotated_bytes = marker.annotate(screenshot_bytes, elements, vp["width"], vp["height"])
             annotated_b64 = base64.b64encode(annotated_bytes).decode("utf-8")
 
         return {
             "url": url,
             "title": title,
-            "viewport": {"width": browser.viewport["width"], "height": browser.viewport["height"]},
-            "elements": [e.model_dump() for e in elements_out],
-            "total_elements": len(elements_out),
+            "viewport": browser.get_viewport(),
+            "elements": [
+                {"id": int(e.id), "tag": e.tag, "text": e.text, "bbox": e.bbox}
+                for e in elements
+            ],
+            "total_elements": len(elements),
             "annotated_screenshot": annotated_b64,
         }
 
@@ -147,9 +129,17 @@ async def som_tree(
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/agent")
 async def ws_agent(ws: WebSocket):
+    """Main WebSocket endpoint for agent task execution.
+
+    Protocol (matches existing frontend app.js):
+        Client → Server: { task, url, model, api_key, base_url, max_steps, headless }
+        Server → Client: { type: "step", step, action, element_id, value, ... }
+        Server → Client: { type: "done", success, answer, total_steps, error }
+        Server → Client: { type: "error", message }
+    """
     await ws.accept()
 
-    # Wait for the start message
+    # Wait for start message
     try:
         raw = await ws.receive_text()
         config: dict[str, Any] = json.loads(raw)
@@ -158,83 +148,114 @@ async def ws_agent(ws: WebSocket):
         await ws.close()
         return
 
-    task: str = config.get("task", "")
-    url: str = config.get("url", "https://www.google.com")
-    model: str = config.get("model", "gpt-4o")
-    api_key: str | None = config.get("api_key") or os.getenv("OPENAI_API_KEY")
-    base_url: str | None = config.get("base_url") or None
-    max_steps: int = config.get("max_steps", 30)
-    headless: bool = config.get("headless", True)
+    task_desc = config.get("task", "")
+    url = config.get("url", "https://www.google.com")
+    provider = config.get("provider", "qwen")
+    model = config.get("model", "gpt-4o")
+    api_key = config.get("api_key") or os.getenv("OPENAI_API_KEY")
+    base_url = config.get("base_url") or None
+    max_steps = config.get("max_steps", 30)
+    headless = config.get("headless", True)
 
-    if not task:
+    if not task_desc:
         await ws.send_json({"type": "error", "message": "Task description is required"})
         await ws.close()
         return
 
     # Build components
-    vlm = OpenAIVLM(
+    from visumark.environment.live_env import LiveEnvironment
+    from visumark.perception.som_perceptor import SoMPerceptor
+    from visumark.reasoning.factory import ReasonerFactory
+    from visumark.core.agent import Agent, StepCallbacks
+    from visumark.dataset.base import TaskInstance
+    from visumark.action.executor import build_target_label
+    from visumark.utils.config import load_config
+
+    env = LiveEnvironment(headless=headless, viewport=(1280, 720))
+    perceptor = SoMPerceptor({
+        "max_elements": 200,
+        "font_size": 14,
+        "use_accessibility_tree": True,
+    })
+    reas_cfg = load_config().get("reasoning", {})
+    reasoner = ReasonerFactory.create(
+        provider=provider,
         model=model,
-        api_key=api_key,
-        base_url=base_url,
-        timeout=60,
+        api_key=api_key or reas_cfg.get("api_key"),
+        base_url=base_url or reas_cfg.get("base_url"),
+        temperature=reas_cfg.get("temperature", 0.0),
+        max_tokens=reas_cfg.get("max_tokens", 4096),
+        timeout=reas_cfg.get("timeout", 120),
+        max_retries=reas_cfg.get("max_retries", 3),
     )
-    browser = BrowserEnv(
-        headless=headless,
-        viewport=(1280, 720),
-    )
-    marker = SoMMarker()
-    agent = VisuMarkAgent(
-        vlm=vlm,
-        browser=browser,
-        marker=marker,
+    agent = Agent(
+        perceptor=perceptor,
+        reasoner=reasoner,
+        env=env,
         max_steps=max_steps,
     )
 
-    # Step callback — fires after each agent step
-    async def on_step(step_result: StepResult, screenshot: bytes) -> None:
-        action_data = {}
-        if step_result.action is not None:
-            action_data = step_result.action.to_dict()
-            action_data["description"] = step_result.action.description
+    class WSCallbacks(StepCallbacks):
+        async def on_step(self, record: StepRecord, bridge: DOMBridge) -> None:
+            action_data = {}
+            target_label = ""
+            if record.action is not None:
+                action_data = record.action.to_dict()
+                target_label = build_target_label(record.action, bridge)
 
-        b64_screenshot = base64.b64encode(screenshot).decode("utf-8") if screenshot else None
+            b64_screenshot = None
+            if record.perception.screenshot:
+                b64_screenshot = base64.b64encode(record.perception.screenshot).decode("utf-8")
 
-        await ws.send_json({
-            "type": "step",
-            "step": step_result.step,
-            "action": action_data.get("action"),
-            "element_id": action_data.get("element_id"),
-            "value": action_data.get("value"),
-            "description": action_data.get("description", ""),
-            "vlm_output": step_result.vlm_output[:2000],  # truncate long outputs
-            "screenshot": b64_screenshot,
-            "target_bbox": list(step_result.target_bbox) if step_result.target_bbox else None,
-            "target_label": step_result.target_label,
-            "success": step_result.success,
-        })
+            # Target bbox for frontend highlight overlay
+            target_bbox = None
+            if record.action and record.action.element_id:
+                for elem in record.perception.elements:
+                    if elem.id == record.action.element_id:
+                        target_bbox = list(elem.bbox)
+                        break
+
+            await ws.send_json({
+                "type": "step",
+                "step": record.step,
+                "action": action_data.get("action"),
+                "element_id": action_data.get("element_id"),
+                "value": action_data.get("value"),
+                "description": target_label,
+                "vlm_output": record.reasoner_output.raw_text[:2000],
+                "screenshot": b64_screenshot,
+                "target_bbox": target_bbox,
+                "target_label": target_label,
+                "success": record.success,
+            })
+
+        async def on_done(self, record) -> None:
+            await ws.send_json({
+                "type": "done",
+                "success": record.success,
+                "answer": record.answer,
+                "total_steps": record.total_steps,
+                "error": record.error,
+            })
+
+    task = TaskInstance(
+        task_id="webui-task",
+        description=task_desc,
+        start_url=url,
+    )
 
     try:
-        result = await agent.run_task(
-            task=task,
-            start_url=url,
-            step_callback=on_step,
-        )
-
-        await ws.send_json({
-            "type": "done",
-            "success": result.success,
-            "answer": result.answer,
-            "total_steps": result.total_steps,
-            "error": result.error,
-        })
-
+        await agent.run(task, callbacks=WSCallbacks())
     except Exception as exc:
-        await ws.send_json({"type": "error", "message": str(exc)})
+        try:
+            await ws.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
     finally:
         try:
             await ws.close()
         except Exception:
-            pass  # already closed
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -245,13 +266,13 @@ def main():
     import uvicorn
 
     parser = argparse.ArgumentParser(description="VisuMark Agent Web UI Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address")
-    parser.add_argument("--port", type=int, default=8000, help="Bind port")
-    parser.add_argument("--reload", action="store_true", help="Enable auto-reload (dev)")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
 
     uvicorn.run(
-        "visumark_web.server:app" if __package__ else "server:app",
+        "server:app",
         host=args.host,
         port=args.port,
         reload=args.reload,

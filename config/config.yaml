@@ -1,34 +1,65 @@
 # VisuMark Agent Configuration
+# ============================================================================
 
-vlm:
-  provider: openai           # openai | qwen | local
-  model: gpt-4o              # gpt-4o | gpt-4-vision-preview | qwen-vl-max
-  api_key: ${OPENAI_API_KEY}  # env variable
-  base_url: null
-  max_tokens: 4096
+agent:
+  mode: som                     # "som" (primary: visual SoM + VLM) | "html" (auxiliary: text HTML + LLM)
+  max_steps: 15
+  retry_on_error: true
+  max_retries: 3
+
+# ---------------------------------------------------------------------------
+# Perception — how the agent "sees" the page
+# ---------------------------------------------------------------------------
+perception:
+  som:
+    max_elements: 200           # Max interactive elements to label
+    font_size: 14               # SoM label font size
+    border_color: "#FF0000"     # Default bounding box color
+    border_width: 2
+    show_labels: true
+    use_accessibility_tree: true  # Fuse DOM + Accessibility Tree (WebGUM approach)
+    min_element_size: 4         # Minimum pixel area to consider an element
+  html:
+    max_candidates: 50
+    cleaning_preset: mind2web   # "mind2web" | "minimal" | "none"
+
+# ---------------------------------------------------------------------------
+# Reasoning — which VLM/LLM to use
+# ---------------------------------------------------------------------------
+reasoning:
+  provider: qwen                # "openai" | "anthropic" | "qwen" | "local"
+  model: qwen3-vl-8b-instruct
+  api_key: "sk-af34b0af217c4deab60b8a5046dde2a0"
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   temperature: 0.0
-  timeout: 60
+  max_tokens: 4096
+  timeout: 120
+  max_retries: 3
 
+# ---------------------------------------------------------------------------
+# Environment — browser settings
+# ---------------------------------------------------------------------------
 environment:
+  type: live                    # "live" (real browser) | "offline" (cached snapshots)
   headless: true
   viewport_width: 1280
   viewport_height: 720
-  timeout: 30000       # ms per action
+  timeout: 30000                # ms per action
 
-som:
-  enabled: true
-  label_font_size: 14
-  bounding_box_color: "#FF0000"
-  show_labels: true
-  max_elements: 50
-
-agent:
-  max_steps: 30
-  step_timeout: 60        # seconds
-  retry_on_error: true
-  max_retries: 3
-  screenshot_dir: ./data/screenshots
-
+# ---------------------------------------------------------------------------
+# Evaluation — Mind2Web benchmark settings
+# ---------------------------------------------------------------------------
 evaluation:
-  metrics: [element_accuracy, step_success_rate, task_success_rate]
+  splits:
+    - test_cross_task
+    - test_cross_website
+    - test_cross_domain
   output_dir: ./data/results
+  max_tasks_per_split: null     # null = all tasks; set a number for quick tests
+
+# ---------------------------------------------------------------------------
+# Data paths
+# ---------------------------------------------------------------------------
+data:
+  mind2web_dir: ./data/mind2web
+  screenshot_dir: ./data/screenshots

@@ -1,0 +1,52 @@
+# Model Registry — supported VLM/LLM providers and models
+# ============================================================================
+
+providers:
+  # ------------------------------------------------------------------------
+  # Qwen (通义千问) — primary choice per project proposal
+  # ------------------------------------------------------------------------
+  qwen:
+    models:
+      - qwen3-vl-8b-instruct
+      - qwen-vl-max
+      - qwen-vl-plus
+    default_model: qwen3-vl-8b-instruct
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+    type: vlm                    # Supports vision input
+
+  # ------------------------------------------------------------------------
+  # OpenAI — GPT-4V / GPT-4o
+  # ------------------------------------------------------------------------
+  openai:
+    models:
+      - gpt-4o
+      - gpt-4.1
+      - gpt-4-turbo
+    default_model: gpt-4o
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    type: vlm
+
+  # ------------------------------------------------------------------------
+  # Anthropic — Claude 3.5/4
+  # ------------------------------------------------------------------------
+  anthropic:
+    models:
+      - claude-sonnet-4-6
+      - claude-opus-4-8
+      - claude-haiku-4-5
+    default_model: claude-sonnet-4-6
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    type: vlm
+
+  # ------------------------------------------------------------------------
+  # Local — Ollama / vLLM / any OpenAI-compatible endpoint
+  # ------------------------------------------------------------------------
+  local:
+    models: ["*"]                # Any model name accepted
+    default_model: qwen3-vl:8b
+    base_url: http://localhost:11434/v1
+    api_key_env: null            # No key needed for local
+    type: vlm
