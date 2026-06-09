@@ -88,6 +88,13 @@ class SoMPerceptor(BasePerceptor):
         elements = await self.extractor.extract(page, ats_nodes)
         logger.debug(f"Extracted {len(elements)} elements")
 
+        # If page seems empty (still loading), wait and retry once
+        if len(elements) < 3 and hasattr(env, "is_live") and env.is_live:
+            logger.debug(f"Page appears empty ({len(elements)} elements), waiting for content...")
+            await page.wait_for_timeout(2000)
+            elements = await self.extractor.extract(page, ats_nodes)
+            logger.debug(f"Retry: extracted {len(elements)} elements")
+
         # 4. Draw SoM annotation on screenshot
         vp = env.get_viewport()
         annotated = self.marker.annotate(

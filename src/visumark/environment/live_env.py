@@ -42,7 +42,16 @@ class LiveEnvironment(BaseEnvironment):
         )
         self._page = await self._context.new_page()
         if url and url != "about:blank":
-            await self._page.goto(url, timeout=self._timeout, wait_until="domcontentloaded")
+            try:
+                await self._page.goto(url, timeout=self._timeout, wait_until="domcontentloaded")
+            except Exception:
+                logger.warning(f"Initial navigation to {url} timed out, continuing anyway...")
+            # Wait for page to settle (lazy-loaded content, SPAs, etc.)
+            try:
+                await self._page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                pass
+            await self._page.wait_for_timeout(1000)  # Extra settle time for rendering
         logger.info(f"Live browser started (headless={self._headless})")
 
     async def stop(self) -> None:
@@ -170,9 +179,16 @@ class LiveEnvironment(BaseEnvironment):
                     timeout=self._timeout,
                     wait_until="domcontentloaded",
                 )
+                # Wait for page to settle after navigation
+                try:
+                    await self._page.wait_for_load_state("networkidle", timeout=10_000)
+                except Exception:
+                    pass
+                await self._page.wait_for_timeout(1000)
 
             elif atype == ActionType.PRESS:
-                await self._page.keyboard.press(action.value or "Enter")
+                key = self._normalize_key(action.value or "Enter")
+                await self._page.keyboard.press(key)
 
             elif atype == ActionType.HOVER and action.element_id is not None:
                 await self._click_element(action, bridge)  # hover = click without side effects
@@ -208,6 +224,31 @@ class LiveEnvironment(BaseEnvironment):
             return False
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        """Normalize key names for Playwright's keyboard.press().
+
+        Playwright expects capitalized key names: Enter, Escape, Tab, Backspace, etc.
+        VLM may output lowercase or variant names.
+        """
+        key_map = {
+            "enter": "Enter", "return": "Enter",
+            "esc": "Escape", "escape": "Escape",
+            "tab": "Tab",
+            "backspace": "Backspace", "delete": "Delete",
+            "space": "Space", " ": "Space",
+            "up": "ArrowUp", "down": "ArrowDown",
+            "left": "ArrowLeft", "right": "ArrowRight",
+            "pageup": "PageUp", "pagedown": "PageDown",
+            "home": "Home", "end": "End",
+            "ctrl": "Control", "alt": "Alt", "shift": "Shift",
+        }
+        return key_map.get(key.lower(), key)
+
+    # ------------------------------------------------------------------
     # Element interaction helpers (with coordinate fallback)
     # ------------------------------------------------------------------
 
@@ -237,18 +278,28 @@ class LiveEnvironment(BaseEnvironment):
         js_action = {
             "click": "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); el.focus(); el.click();",
             "focus": "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); el.focus();",
-            "select_all": "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); el.focus(); el.select();",
+            "select_all": (
+                "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); el.focus();"
+                "if (typeof el.select === 'function') { el.select(); }"
+                "else if (el.setSelectionRange) { el.setSelectionRange(0, el.value.length); }"
+                "else { el.click(); }"
+            ),
         }.get(action, "el.click();")
 
-        result = await self._page.evaluate(f"""
-            (() => {{
-                const el = document.querySelector('[data-som-id="{element_id}"]');
-                if (!el) return false;
-                {js_action}
-                return true;
-            }})()
-        """)
-        return bool(result)
+        try:
+            result = await self._page.evaluate(f"""
+                (() => {{
+                    try {{
+                        const el = document.querySelector('[data-som-id="{element_id}"]');
+                        if (!el) return false;
+                        {js_action}
+                        return true;
+                    }} catch(e) {{ return false; }}
+                }})()
+            """)
+            return bool(result)
+        except Exception:
+            return False
 
     async def _click_element(
         self, action: Action, bridge: DOMBridge | None

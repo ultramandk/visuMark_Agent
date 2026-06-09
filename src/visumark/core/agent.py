@@ -128,6 +128,7 @@ class Agent:
                 record = await self._execute_step(
                     step=step_num,
                     task_description=task.description,
+                    history=result.steps,
                 )
                 result.steps.append(record)
 
@@ -192,6 +193,7 @@ class Agent:
         self,
         step: int,
         task_description: str,
+        history: list,
     ) -> StepRecord:
         """Run a single observe → reason → act cycle.
 
@@ -218,7 +220,7 @@ class Agent:
                 reasoner_output = await self.reasoner.reason(
                     perception,
                     task_description,
-                    result.steps,  # Pass history so VLM knows what failed
+                    history,  # Pass history so VLM knows what failed
                 )
                 break
             except ParseError as e:
