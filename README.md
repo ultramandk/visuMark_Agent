@@ -67,6 +67,7 @@ python scripts/run_web.py
 GET /api/som-tree?url=<网址>&annotate=true&max_elements=50&headless=true
 ```
 
+
 返回元素列表（id, tag, text, bbox）+ 标注截图 base64。
 
 ### 命令行

@@ -156,7 +156,10 @@ class VisuMarkAgent:
         """Run a single observe→reason→act cycle.
 
         Returns:
-            Tuple of (StepResult, annotated_screenshot_bytes).
+            Tuple of (StepResult, raw_screenshot_bytes).
+            The raw screenshot (without SoM overlay) is meant for UI display;
+            the annotated version is used internally for VLM inference and
+            saved to disk for debugging.
         """
         page = self.browser.page
         empty_screenshot = b""
@@ -212,7 +215,7 @@ class VisuMarkAgent:
                     vlm_output=vlm_output,
                     success=False,
                 ),
-                annotated,
+                raw_screenshot,  # raw screenshot for UI — annotated is for VLM only
             )
 
         # 4. resolve target element bbox & build label
@@ -243,5 +246,5 @@ class VisuMarkAgent:
                 vlm_output=vlm_output,
                 success=success,
             ),
-            annotated,
+            raw_screenshot,  # raw screenshot for UI — annotated is for VLM only
         )
