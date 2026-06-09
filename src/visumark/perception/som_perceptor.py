@@ -116,7 +116,8 @@ class SoMPerceptor(BasePerceptor):
         url = await env.get_page_url()
 
         perception = Perception(
-            screenshot=annotated,
+            screenshot=screenshot,            # Clean — for UI / frontend
+            annotated_screenshot=annotated,   # SoM — for VLM (not shown to user)
             elements=elements,
             page_title=title,
             page_url=url,

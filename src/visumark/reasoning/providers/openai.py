@@ -76,9 +76,11 @@ class OpenAIReasoner(BaseReasoner):
         user_msg = build_som_user_prompt(task, perception, history)
 
         # Build content blocks (text + image)
+        # Use SoM-annotated screenshot for VLM, fallback to clean screenshot
         content: list[dict] = [{"type": "text", "text": user_msg}]
-        if perception.screenshot:
-            b64 = base64.b64encode(perception.screenshot).decode("utf-8")
+        img_bytes = perception.annotated_screenshot or perception.screenshot
+        if img_bytes:
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
             content.append({
                 "type": "image_url",
                 "image_url": {

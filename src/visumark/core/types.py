@@ -136,11 +136,14 @@ class PageElement:
 class Perception:
     """Result of page perception — what the agent "sees".
 
-    In SoM mode: screenshot is the annotated image with bounding boxes.
-    In HTML mode: screenshot is None (text-only reasoning).
+    In SoM mode:
+        - screenshot: clean screenshot for UI display (user sees the real page)
+        - annotated_screenshot: SoM-annotated with bounding boxes + labels for VLM
+    In HTML mode: both screenshots are None (text-only reasoning).
     """
 
-    screenshot: bytes | None = None          # Annotated screenshot PNG (SoM mode)
+    screenshot: bytes | None = None          # Clean screenshot for UI display
+    annotated_screenshot: bytes | None = None  # SoM-annotated for VLM (not shown to user)
     elements: list[PageElement] = field(default_factory=list)
     page_title: str = ""
     page_url: str = ""

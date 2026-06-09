@@ -21,6 +21,7 @@ from loguru import logger
 
 from visumark.core.types import (
     ActionType,
+    ReasonerOutput,
     StepRecord,
     TaskRecord,
 )
@@ -187,11 +188,14 @@ class Agent:
         # 1. PERCEIVE
         perception, bridge = await self.perceptor.perceive(self.env)
 
-        # Save screenshot for debugging
+        # Save screenshots for debugging (both clean and SoM-annotated)
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         if perception.screenshot:
-            path = self.screenshot_dir / f"step_{step:03d}.png"
-            path.write_bytes(perception.screenshot)
+            path_clean = self.screenshot_dir / f"step_{step:03d}_clean.jpg"
+            path_clean.write_bytes(perception.screenshot)
+        if perception.annotated_screenshot:
+            path_anno = self.screenshot_dir / f"step_{step:03d}_som.jpg"
+            path_anno.write_bytes(perception.annotated_screenshot)
 
         # 2. REASON (with retry)
         reasoner_output = None
@@ -214,7 +218,7 @@ class Agent:
             return StepRecord(
                 step=step,
                 perception=perception,
-                reasoner_output=reasoner_output or __import__("visumark.core.types").ReasonerOutput(raw_text=""),
+                reasoner_output=reasoner_output or ReasonerOutput(raw_text=""),
                 action=None,
                 success=False,
             )

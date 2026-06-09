@@ -151,8 +151,8 @@ async def ws_agent(ws: WebSocket):
     task_desc = config.get("task", "")
     url = config.get("url", "https://www.google.com")
     provider = config.get("provider", "qwen")
-    model = config.get("model", "gpt-4o")
-    api_key = config.get("api_key") or os.getenv("OPENAI_API_KEY")
+    model = config.get("model", "qwen3-vl-8b-instruct")
+    api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
     base_url = config.get("base_url") or None
     max_steps = config.get("max_steps", 30)
     headless = config.get("headless", True)
@@ -169,7 +169,10 @@ async def ws_agent(ws: WebSocket):
     from visumark.core.agent import Agent, StepCallbacks
     from visumark.dataset.base import TaskInstance
     from visumark.action.executor import build_target_label
+
+    # Load YAML config for defaults (provider, model, api_key, base_url)
     from visumark.utils.config import load_config
+    reas_cfg = load_config().get("reasoning", {})
 
     env = LiveEnvironment(headless=headless, viewport=(1280, 720))
     perceptor = SoMPerceptor({
@@ -177,7 +180,6 @@ async def ws_agent(ws: WebSocket):
         "font_size": 14,
         "use_accessibility_tree": True,
     })
-    reas_cfg = load_config().get("reasoning", {})
     reasoner = ReasonerFactory.create(
         provider=provider,
         model=model,
