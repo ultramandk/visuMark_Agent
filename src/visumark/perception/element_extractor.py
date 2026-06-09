@@ -83,6 +83,7 @@ class ElementExtractor:
 
         # Assign final SoM IDs and update DOM attributes
         elements: list[PageElement] = []
+        stale_count = 0
         for i, (elem, _handle, temp_id) in enumerate(candidates):
             som_id = str(i + 1)
             elem.id = som_id
@@ -96,12 +97,23 @@ class ElementExtractor:
             except Exception:
                 # Handle stale — use JS querySelector as fallback
                 try:
-                    await page.evaluate(
-                        f"document.querySelector('[data-som-id=\"{temp_id}\"]')"
-                        f"?.setAttribute('data-som-id', '{som_id}')"
+                    result = await page.evaluate(
+                        f"(() => {{"
+                        f"  const el = document.querySelector('[data-som-id=\"{temp_id}\"]');"
+                        f"  if (el) {{ el.setAttribute('data-som-id', '{som_id}'); return true; }}"
+                        f"  return false;"
+                        f"}})()"
                     )
+                    if not result:
+                        stale_count += 1
                 except Exception:
-                    pass
+                    stale_count += 1
+
+        if stale_count > 0:
+            logger.warning(
+                f"{stale_count}/{len(elements)} elements could not be tagged "
+                f"with data-som-id (stale handles) — coordinate fallback will be used"
+            )
 
         logger.debug(f"Extracted {len(elements)} interactive elements")
         return elements

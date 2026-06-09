@@ -53,7 +53,15 @@ Respond with a JSON object. Include your reasoning in the "thought" field:
 4. Only use "answer" when the task is fully complete. Include the result in "value".
 5. If genuinely stuck, use "fail" and explain why.
 6. The "element_id" field must be a STRING matching the number on the screenshot.
-7. Output ONLY the JSON object — no extra text."""
+7. Output ONLY the JSON object — no extra text.
+
+## Stuck / Failure Recovery
+
+If you see that the SAME action failed repeatedly in the Recent Actions (marked with ✗):
+- DO NOT repeat the same action. It clearly isn't working.
+- Try a DIFFERENT approach: a different element, scroll first, try pressing Enter after typing, or use goto to navigate directly.
+- If an input field keeps failing, try clicking it first, then use press Enter/Tab to activate it.
+- After 2-3 consecutive ✗ failures on similar actions, consider using scroll down/up to reveal hidden elements, or use "answer" / "fail" if truly stuck."""
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +92,23 @@ def build_som_user_prompt(
     if history:
         recent = history[-3:]
         lines = ["## Recent Actions"]
+        fail_count = 0
         for rec in recent:
             if rec.action:
                 act_desc = _describe_action(rec.action)
                 status = "✓" if rec.success else "✗"
                 lines.append(f"- [{status}] Step {rec.step}: {act_desc}")
+                if not rec.success:
+                    fail_count += 1
         parts.append("\n".join(lines))
+
+        # Emphasize when previous actions failed
+        if fail_count >= 2:
+            parts.append(
+                "\n⚠️  YOUR PREVIOUS ACTIONS FAILED. Do NOT repeat them. "
+                "Try a completely different approach — scroll to find other elements, "
+                "use press Enter to submit, or goto a different URL."
+            )
 
     parts.append(
         "## Instruction\n"

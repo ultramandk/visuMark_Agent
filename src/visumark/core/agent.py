@@ -165,10 +165,24 @@ class Agent:
 
         finally:
             await self.env.stop()
+            # Clean up screenshots after task completes
+            self._cleanup_screenshots()
 
         result.total_steps = len(result.steps)
         await callbacks.on_done(result)
         return result
+
+    def _cleanup_screenshots(self) -> None:
+        """Clear all screenshots from the screenshot directory after task completion."""
+        if not self.screenshot_dir.exists():
+            return
+        try:
+            for f in self.screenshot_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
+            logger.debug(f"Cleared screenshots in: {self.screenshot_dir}")
+        except Exception as exc:
+            logger.debug(f"Failed to clear screenshots: {exc}")
 
     # ------------------------------------------------------------------
     # Single step
@@ -204,7 +218,7 @@ class Agent:
                 reasoner_output = await self.reasoner.reason(
                     perception,
                     task_description,
-                    [],  # History not passed to VLM yet (future: add memory)
+                    result.steps,  # Pass history so VLM knows what failed
                 )
                 break
             except ParseError as e:
