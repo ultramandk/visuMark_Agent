@@ -62,8 +62,39 @@ class SoMPerceptor(BasePerceptor):
         Returns:
             (Perception, DOMBridge) tuple — ready for the reasoner.
         """
-        # 1. Take screenshot
-        screenshot = await env.screenshot()
+        from visumark.utils.image import is_blank_screenshot
+
+        page = env.page if hasattr(env, "page") else None
+        if page is None:
+            logger.warning("No Playwright page available — returning empty perception")
+            return (Perception(screenshot=b""), DOMBridge())
+
+        # ── 0. Ensure page is actually rendered ──
+        #    This is the KEY fix for blank screenshots: wait for real
+        #    content before taking the screenshot, not after.
+        if hasattr(env, "wait_for_page_ready"):
+            try:
+                await env.wait_for_page_ready()
+            except Exception as exc:
+                logger.debug(f"wait_for_page_ready failed: {exc}")
+
+        # ── 1. Screenshot with blank-check retry ──
+        MAX_RETRIES = 5
+        screenshot = b""
+        for attempt in range(MAX_RETRIES):
+            screenshot = await env.screenshot()
+
+            if not is_blank_screenshot(screenshot, variance_threshold=20.0):
+                break  # Has real content
+
+            logger.warning(
+                f"Blank screenshot detected (attempt {attempt + 1}/{MAX_RETRIES}), "
+                f"waiting & retrying..."
+            )
+            if hasattr(env, "wait_for_page_ready"):
+                await env.wait_for_page_ready(settle_ms=2000 + attempt * 1500)
+            else:
+                await page.wait_for_timeout(2000 + attempt * 1500)
 
         # 2. Get Accessibility Tree (optional but recommended)
         ats_nodes = None
@@ -77,23 +108,23 @@ class SoMPerceptor(BasePerceptor):
                 logger.debug(f"ATS unavailable: {exc}")
 
         # 3. Extract interactive elements
-        page = env.page if hasattr(env, "page") else None
-        if page is None:
-            logger.warning("No Playwright page available — returning empty perception")
-            return (
-                Perception(screenshot=screenshot),
-                DOMBridge(),
-            )
-
         elements = await self.extractor.extract(page, ats_nodes)
         logger.debug(f"Extracted {len(elements)} elements")
 
-        # If page seems empty (still loading), wait and retry once
-        if len(elements) < 3 and hasattr(env, "is_live") and env.is_live:
-            logger.debug(f"Page appears empty ({len(elements)} elements), waiting for content...")
-            await page.wait_for_timeout(2000)
+        # If page seems empty (still loading), wait, re-screenshot, and retry
+        if len(elements) < 5 and hasattr(env, "is_live") and env.is_live:
+            logger.warning(
+                f"Page appears empty ({len(elements)} elements), "
+                f"waiting & re-taking screenshot..."
+            )
+            if hasattr(env, "wait_for_page_ready"):
+                await env.wait_for_page_ready(settle_ms=3000)
+            else:
+                await page.wait_for_timeout(3000)
+
+            screenshot = await env.screenshot()
             elements = await self.extractor.extract(page, ats_nodes)
-            logger.debug(f"Retry: extracted {len(elements)} elements")
+            logger.debug(f"Retry: extracted {len(elements)} elements, screenshot retaken")
 
         # 4. Draw SoM annotation on screenshot
         vp = env.get_viewport()

@@ -1,14 +1,18 @@
 """Extract interactive elements from a web page for SoM annotation.
 
-KEY FIX: Injects data-som-id directly via Playwright element handles during
-extraction, eliminating the CSS selector mismatch that caused clicks on
-wrong elements. The old approach of generating CSS selectors and later
-injecting via querySelector was unreliable for elements without unique
-identifiers (bare <a>, <button> without class/id, etc.).
+All DOM access happens in a SINGLE atomic page.evaluate() call. This
+completely eliminates the "stale handle" problem where Playwright element
+handles become invalid because the DOM changed between querySelectorAll
+and the final attribute update.
+
+The old handle-iteration approach was fundamentally racy on dynamic pages
+(SPAs, lazy-loaded content, hydration).
 """
 
+import json
+
 from loguru import logger
-from playwright.async_api import Page, ElementHandle
+from playwright.async_api import Page
 
 from visumark.core.types import PageElement
 from visumark.environment.dom_utils import (
@@ -20,8 +24,13 @@ from visumark.environment.dom_utils import (
 class ElementExtractor:
     """Extract clickable / interactable elements from a Playwright page.
 
-    Uses DOM + optional Accessibility Tree fusion. Injects data-som-id
-    attributes directly during extraction — no CSS selector dependency.
+    Uses a single JS evaluation to:
+    1. Query all interactive elements
+    2. Filter by visibility and size
+    3. Extract attributes, text, bbox
+    4. Sort by visual position (top→bottom, left→right)
+    5. Assign sequential SoM IDs
+    6. Write data-som-id into the DOM — all atomically
     """
 
     def __init__(self, max_elements: int = 200, min_element_size: int = 4):
@@ -35,217 +44,194 @@ class ElementExtractor:
     ) -> list[PageElement]:
         """Extract interactive elements from the current page.
 
-        Steps:
-        1. Query all interactive elements
-        2. Filter by visibility and size
-        3. Extract attributes, text, bbox
-        4. Sort by visual position
-        5. Assign SoM IDs
-        6. Inject data-som-id directly into DOM via handles (FIXED)
+        All DOM access happens in one atomic JS call → zero stale handles.
         """
         viewport = page.viewport_size or {"width": 1280, "height": 720}
         vw, vh = viewport["width"], viewport["height"]
 
-        # Build ATS lookup
-        ats_by_node: dict[str, dict] = {}
+        # Build a lightweight ATS lookup: backend_node_id → { role, name }
+        ats_map: dict[str, dict] = {}
         if ats_nodes:
             for node in ats_nodes:
                 nid = node.get("backendDOMNodeId") or node.get("nodeId")
                 if nid:
-                    ats_by_node[str(nid)] = node
+                    ats_map[str(nid)] = {
+                        "role": node.get("role", ""),
+                        "name": node.get("name", ""),
+                    }
 
-        # Collect candidate (element, handle) pairs.
-        # Inject data-som-id IMMEDIATELY while handles are still fresh,
-        # using a temporary ID. After sorting, we update to final IDs.
-        candidates: list[tuple[PageElement, ElementHandle, str]] = []
-        handles_list = await page.query_selector_all(INTERACTIVE_SELECTOR)
-        temp_counter = 0
-
-        for handle in handles_list:
-            if len(candidates) >= self.max_elements:
-                break
-            try:
-                elem = await self._extract_single(handle, vw, vh, ats_by_node)
-                if elem is not None:
-                    temp_id = f"som-{temp_counter}"
-                    temp_counter += 1
-                    # Inject immediately while handle is fresh
-                    await handle.evaluate(
-                        f"(el) => el.setAttribute('data-som-id', '{temp_id}')"
-                    )
-                    candidates.append((elem, handle, temp_id))
-            except Exception as exc:
-                logger.debug(f"Skipping element: {exc}")
-                continue
-
-        # Sort by visual position: top-to-bottom, then left-to-right
-        candidates.sort(key=lambda t: (t[0].bbox[1], t[0].bbox[0]))
-
-        # Assign final SoM IDs and update DOM attributes
-        elements: list[PageElement] = []
-        stale_count = 0
-        for i, (elem, _handle, temp_id) in enumerate(candidates):
-            som_id = str(i + 1)
-            elem.id = som_id
-            elements.append(elem)
-
-            # Update from temporary to final SoM ID in the DOM
-            try:
-                await _handle.evaluate(
-                    f"(el) => el.setAttribute('data-som-id', '{som_id}')"
-                )
-            except Exception:
-                # Handle stale — use JS querySelector as fallback
-                try:
-                    result = await page.evaluate(
-                        f"(() => {{"
-                        f"  const el = document.querySelector('[data-som-id=\"{temp_id}\"]');"
-                        f"  if (el) {{ el.setAttribute('data-som-id', '{som_id}'); return true; }}"
-                        f"  return false;"
-                        f"}})()"
-                    )
-                    if not result:
-                        stale_count += 1
-                except Exception:
-                    stale_count += 1
-
-        if stale_count > 0:
-            logger.warning(
-                f"{stale_count}/{len(elements)} elements could not be tagged "
-                f"with data-som-id (stale handles) — coordinate fallback will be used"
-            )
-
-        logger.debug(f"Extracted {len(elements)} interactive elements")
-        return elements
-
-    # ------------------------------------------------------------------
-    # Single element extraction
-    # ------------------------------------------------------------------
-
-    async def _extract_single(
-        self,
-        handle: ElementHandle,
-        vw: int, vh: int,
-        ats_by_node: dict[str, dict],
-    ) -> PageElement | None:
-        """Extract data from a single element handle. Returns None if skip."""
-
-        # Visibility
-        visible = await handle.is_visible()
-        if not visible:
-            return None
-
-        # Bounding box
-        box = await handle.bounding_box()
-        if not box:
-            return None
-        bw, bh = box["width"], box["height"]
-        if bw * bh < self.min_element_size:
-            return None
-
-        # Tag
-        tag_raw = await handle.evaluate("el => el.tagName")
-        tag = tag_raw.lower() if tag_raw else ""
-
-        # Attributes
-        attributes = await self._extract_attributes(handle)
-
-        # Text
-        text = await self._extract_text(handle, attributes)
-
-        # Backend node ID
-        backend_node_id = attributes.get("data-backend-node-id") or None
-
-        # ATS fusion
-        if ats_by_node and backend_node_id:
-            ats_info = ats_by_node.get(backend_node_id)
-            if ats_info:
-                if not attributes.get("role") and ats_info.get("role"):
-                    attributes["role"] = ats_info["role"]
-                if not text and ats_info.get("name"):
-                    text = clean_text(ats_info["name"])
-
-        # Generate a best-effort CSS selector for the DOM bridge
-        selector = self._build_fallback_selector(tag, attributes, handle)
-
-        return PageElement(
-            id="0",  # Placeholder, assigned after sorting
-            tag=tag,
-            text=text,
-            bbox=(box["x"] / vw, box["y"] / vh, bw / vw, bh / vh),
-            attributes=attributes,
-            backend_node_id=backend_node_id,
-            selector=selector,
+        # ── Single JS evaluation: extract everything atomically ──
+        raw_elements = await page.evaluate(
+            _build_extraction_js(viewport, ats_map, self.max_elements, self.min_element_size)
         )
 
-    # ------------------------------------------------------------------
-    # Attribute extraction
-    # ------------------------------------------------------------------
+        # Convert raw JS objects to PageElement dataclasses
+        elements: list[PageElement] = []
+        for raw in raw_elements:
+            elements.append(PageElement(
+                id=str(raw["id"]),
+                tag=raw["tag"],
+                text=clean_text(raw["text"]),
+                bbox=(
+                    raw["x"] / vw,
+                    raw["y"] / vh,
+                    raw["w"] / vw,
+                    raw["h"] / vh,
+                ),
+                attributes=raw.get("attributes", {}),
+                backend_node_id=raw.get("backend_node_id"),
+                selector=raw.get("selector", raw["tag"]),
+            ))
 
-    async def _extract_attributes(self, handle: ElementHandle) -> dict:
-        try:
-            attrs_js = await handle.evaluate("""
-                (el) => {
-                    const attrs = {};
-                    const keys = [
-                        'id', 'class', 'name', 'type', 'href', 'placeholder',
-                        'aria-label', 'aria-expanded', 'aria-haspopup',
-                        'aria-checked', 'aria-selected', 'aria-describedby',
-                        'role', 'value', 'title', 'alt', 'tabindex',
-                        'disabled', 'checked', 'readonly', 'required',
-                        'data-backend-node-id', 'data-id', 'data-testid',
-                    ];
-                    for (const k of keys) {
-                        const v = el.getAttribute(k);
-                        if (v !== null && v !== '') attrs[k] = v;
-                    }
-                    return attrs;
-                }
-            """)
-            return attrs_js if attrs_js else {}
-        except Exception:
-            return {}
-
-    async def _extract_text(self, handle: ElementHandle, attrs: dict) -> str:
-        for attr in ("aria-label", "placeholder", "title", "value", "alt"):
-            if attr in attrs and attrs[attr]:
-                return clean_text(attrs[attr])
-        try:
-            text = await handle.evaluate("""
-                (el) => {
-                    if (el.tagName === 'INPUT') {
-                        return el.placeholder || el.value || el.getAttribute('aria-label') || '';
-                    }
-                    if (el.tagName === 'SELECT') {
-                        const opt = el.options[el.selectedIndex];
-                        return (opt && opt.text) || el.getAttribute('aria-label') || '';
-                    }
-                    return (el.textContent || '').trim().substring(0, 80);
-                }
-            """)
-            return clean_text(text)
-        except Exception:
-            return ""
-
-    def _build_fallback_selector(
-        self, tag: str, attrs: dict, handle: ElementHandle
-    ) -> str:
-        """Build a CSS selector for the DOM bridge (used as fallback, not for injection)."""
-        if "id" in attrs and attrs["id"]:
-            return f"{tag}#{_escape(attrs['id'])}"
-        if "data-testid" in attrs:
-            return f"[data-testid='{_escape(attrs['data-testid'])}']"
-        if "data-backend-node-id" in attrs:
-            return f"[data-backend-node-id='{_escape(attrs['data-backend-node-id'])}']"
-        if "class" in attrs and attrs["class"]:
-            cls = attrs["class"].strip().split()[0]
-            return f"{tag}.{_escape(cls)}"
-        if "aria-label" in attrs:
-            return f"{tag}[aria-label='{_escape(attrs['aria-label'])}']"
-        if "name" in attrs:
-            return f"{tag}[name='{_escape(attrs['name'])}']"
-        return tag
+        logger.debug(f"Extracted {len(elements)} interactive elements (atomic JS)")
+        return elements
 
 
-def _escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+def _build_extraction_js(
+    viewport: dict,
+    ats_map: dict,
+    max_elements: int,
+    min_size: int,
+) -> str:
+    """Build the JavaScript that runs inside the page atomically.
+
+    Returns a JSON-serializable list of element dicts.
+    """
+    ats_json = json.dumps(ats_map)
+
+    return f"""(() => {{
+    const MAX = {max_elements};
+    const MIN_SIZE = {min_size};
+    const ATS_MAP = {ats_json};
+    const SELECTOR = "{INTERACTIVE_SELECTOR.replace('"', '\\"')}";
+    const VW = {viewport["width"]};
+    const VH = {viewport["height"]};
+
+    const KEY_ATTRS = [
+        'id', 'class', 'name', 'type', 'href', 'placeholder',
+        'aria-label', 'aria-expanded', 'aria-haspopup',
+        'aria-checked', 'aria-selected', 'aria-describedby',
+        'role', 'value', 'title', 'alt', 'tabindex',
+        'disabled', 'checked', 'readonly', 'required',
+        'data-backend-node-id', 'data-id', 'data-testid',
+    ];
+
+    function getText(el) {{
+        const tag = el.tagName.toLowerCase();
+        const aria = el.getAttribute('aria-label');
+        if (aria && aria.trim()) return aria.trim().substring(0, 80);
+        const ph = el.getAttribute('placeholder');
+        if (ph && ph.trim()) return ph.trim().substring(0, 80);
+        const ttl = el.getAttribute('title');
+        if (ttl && ttl.trim()) return ttl.trim().substring(0, 80);
+        if (tag === 'input' && el.value) return el.value.substring(0, 80);
+        const alt = el.getAttribute('alt');
+        if (alt && alt.trim()) return alt.trim().substring(0, 80);
+        if (tag === 'select') {{
+            const opt = el.options && el.options[el.selectedIndex];
+            if (opt && opt.text) return opt.text.trim().substring(0, 80);
+        }}
+        const tc = (el.textContent || '').trim();
+        return tc.substring(0, 80);
+    }}
+
+    function buildSelector(tag, attrs) {{
+        if (attrs['id']) return tag + '#' + CSS.escape(attrs['id']);
+        if (attrs['data-testid']) return '[data-testid="' + CSS.escape(attrs['data-testid']) + '"]';
+        if (attrs['data-backend-node-id']) return '[data-backend-node-id="' + CSS.escape(attrs['data-backend-node-id']) + '"]';
+        if (attrs['class']) {{
+            const cls = attrs['class'].trim().split(/\\s+/)[0];
+            if (cls) return tag + '.' + CSS.escape(cls);
+        }}
+        if (attrs['aria-label']) return tag + '[aria-label="' + CSS.escape(attrs['aria-label']) + '"]';
+        if (attrs['name']) return tag + '[name="' + CSS.escape(attrs['name']) + '"]';
+        return tag;
+    }}
+
+    // 1. Query all interactive elements
+    const all = document.querySelectorAll(SELECTOR);
+    const candidates = [];
+
+    for (const el of all) {{
+        if (candidates.length >= MAX) break;
+
+        // Visibility check
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') continue;
+        if (style.opacity === '0') continue;
+
+        const rect = el.getBoundingClientRect();
+        const area = rect.width * rect.height;
+        if (area < MIN_SIZE) continue;
+
+        // Off-screen check
+        if (rect.bottom < -500 || rect.top > VH + 500) continue;
+        if (rect.right < -500 || rect.left > VW + 500) continue;
+
+        const tag = el.tagName.toLowerCase();
+
+        // Attributes
+        const attrs = {{}};
+        for (const k of KEY_ATTRS) {{
+            const v = el.getAttribute(k);
+            if (v !== null && v !== '') attrs[k] = v;
+        }}
+
+        const text = getText(el);
+        const backendId = attrs['data-backend-node-id'] || null;
+
+        // ATS fusion
+        if (ATS_MAP && backendId && ATS_MAP[backendId]) {{
+            const ats = ATS_MAP[backendId];
+            if (!attrs['role'] && ats.role) attrs['role'] = ats.role;
+        }}
+
+        const selector = buildSelector(tag, attrs);
+
+        candidates.push({{
+            tag: tag,
+            text: text,
+            x: rect.x,
+            y: rect.y,
+            w: rect.width,
+            h: rect.height,
+            attributes: attrs,
+            backend_node_id: backendId,
+            selector: selector,
+        }});
+    }}
+
+    // 2. Sort by visual position: top→bottom, left→right
+    candidates.sort((a, b) => {{
+        const dy = a.y - b.y;
+        if (Math.abs(dy) > 10) return dy;
+        return a.x - b.x;
+    }});
+
+    // 3. Assign sequential IDs and inject data-som-id into DOM
+    for (let i = 0; i < candidates.length; i++) {{
+        const id = i + 1;
+        candidates[i].id = id;
+
+        // Find the element and tag it with data-som-id.
+        // Use the same selector we built — all within this atomic JS call.
+        try {{
+            const el = document.querySelector(candidates[i].selector);
+            if (el) {{
+                el.setAttribute('data-som-id', String(id));
+            }} else {{
+                // Fallback: try elementFromPoint at bbox center
+                const cx = candidates[i].x + candidates[i].w / 2;
+                const cy = candidates[i].y + candidates[i].h / 2;
+                const atPoint = document.elementFromPoint(cx, cy);
+                if (atPoint) {{
+                    atPoint.setAttribute('data-som-id', String(id));
+                }}
+            }}
+        }} catch(e) {{
+            // Element gone — but data is still valid for annotation
+        }}
+    }}
+
+    return candidates;
+}})()"""

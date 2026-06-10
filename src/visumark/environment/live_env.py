@@ -46,12 +46,7 @@ class LiveEnvironment(BaseEnvironment):
                 await self._page.goto(url, timeout=self._timeout, wait_until="domcontentloaded")
             except Exception:
                 logger.warning(f"Initial navigation to {url} timed out, continuing anyway...")
-            # Wait for page to settle (lazy-loaded content, SPAs, etc.)
-            try:
-                await self._page.wait_for_load_state("networkidle", timeout=10_000)
-            except Exception:
-                pass
-            await self._page.wait_for_timeout(1000)  # Extra settle time for rendering
+            await self.wait_for_page_ready()
         logger.info(f"Live browser started (headless={self._headless})")
 
     async def stop(self) -> None:
@@ -71,6 +66,97 @@ class LiveEnvironment(BaseEnvironment):
     # Page content
     # ------------------------------------------------------------------
 
+    async def wait_for_page_ready(
+        self,
+        settle_ms: int = 2000,
+        min_body_text: int = 50,
+        max_polls: int = 20,
+    ) -> None:
+        """Wait for the page to actually finish rendering before screenshot.
+
+        Layered approach:
+        1. domcontentloaded — DOM parsed
+        2. networkidle — best-effort, may not fire on SPAs
+        3. Poll for visible text + interactive elements in <body>
+        4. Extra settle time for images, fonts, lazy components
+
+        The content poll is KEY: it checks that the page body actually
+        contains rendered text, not just a blank skeleton.  Uses
+        innerText (respects CSS visibility) to avoid false-passing
+        on hidden SEO text or JSON-LD script content.
+        """
+        if not self._page:
+            return
+
+        # Phase 1: DOM ready
+        try:
+            await self._page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:
+            pass
+
+        # Phase 2: Best-effort network idle
+        try:
+            await self._page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
+
+        # Phase 3: Poll for actual rendered content
+        for i in range(max_polls):
+            try:
+                result = await self._page.evaluate("""() => {
+                    const body = document.body;
+                    if (!body) return {text: 0, elems: 0, spinning: false};
+                    const visibleText = (body.innerText || '').trim();
+                    const interactive = body.querySelectorAll(
+                        'button, a, input, select, textarea, ' +
+                        '[role="button"], [role="link"], [role="checkbox"], ' +
+                        '[role="combobox"], [role="listbox"], [role="menuitem"], ' +
+                        '[role="tab"], [role="switch"], [onclick], [tabindex]'
+                    );
+                    const spinners = body.querySelectorAll(
+                        '[role="progressbar"], [aria-busy="true"], ' +
+                        '.loading, .spinner, .skeleton, ' +
+                        '[class*="loading"], [class*="spinner"], [class*="skeleton"]'
+                    );
+                    return {
+                        text: visibleText.length,
+                        elems: interactive.length,
+                        spinning: spinners.length > 0,
+                    };
+                }""")
+                text_len = result.get("text", 0)
+                elem_count = result.get("elems", 0)
+                has_spinner = result.get("spinning", False)
+
+                if text_len >= min_body_text and elem_count >= 3 and not has_spinner:
+                    logger.debug(f"Page ready: {text_len} chars, {elem_count} elements")
+                    break
+
+                reason = ""
+                if text_len < min_body_text:
+                    reason = f"text={text_len}/{min_body_text}"
+                elif elem_count < 3:
+                    reason = f"elems={elem_count}/3"
+                elif has_spinner:
+                    reason = "spinner present"
+                logger.debug(f"Waiting for page... ({reason}, poll {i + 1}/{max_polls})")
+                await self._page.wait_for_timeout(500)
+            except Exception:
+                await self._page.wait_for_timeout(500)
+
+        # Phase 4: Extra settle for images, fonts, lazy hydration
+        await self._page.wait_for_timeout(settle_ms)
+
+    async def is_alive(self) -> bool:
+        """Check if the browser / page is still responsive."""
+        if not self._page or not self._browser:
+            return False
+        try:
+            await self._page.evaluate("1 + 1")
+            return True
+        except Exception:
+            return False
+
     async def load_html(self, html: str) -> None:
         if not self._page:
             raise RuntimeError("Browser not started")
@@ -79,8 +165,7 @@ class LiveEnvironment(BaseEnvironment):
     async def screenshot(self) -> bytes:
         if not self._page:
             raise RuntimeError("Browser not started")
-        # Use JPEG at reduced size for fast API upload
-        return await self._page.screenshot(full_page=False, type="jpeg", quality=65, scale="css")
+        return await self._page.screenshot(full_page=False, type="png")
 
     async def get_page_html(self) -> str:
         if not self._page:
@@ -157,6 +242,9 @@ class LiveEnvironment(BaseEnvironment):
         if not self._page:
             raise RuntimeError("Browser not started")
 
+        # Record URL before action to detect navigation
+        url_before = self._page.url
+
         try:
             atype = action.action_type
 
@@ -179,12 +267,7 @@ class LiveEnvironment(BaseEnvironment):
                     timeout=self._timeout,
                     wait_until="domcontentloaded",
                 )
-                # Wait for page to settle after navigation
-                try:
-                    await self._page.wait_for_load_state("networkidle", timeout=10_000)
-                except Exception:
-                    pass
-                await self._page.wait_for_timeout(1000)
+                await self.wait_for_page_ready()
 
             elif atype == ActionType.PRESS:
                 key = self._normalize_key(action.value or "Enter")
@@ -215,6 +298,20 @@ class LiveEnvironment(BaseEnvironment):
             else:
                 logger.warning(f"Unknown action type: {atype}")
                 return False
+
+            # ── Post-action: detect navigation & wait for new page ──
+            # CLICK / TYPE+Enter / PRESS Enter can trigger page navigation
+            # or form submission. If the URL changed, wait for the new page
+            # to fully render so the next perception step doesn't get a
+            # blank screenshot.
+            url_after = self._page.url
+            if url_after != url_before:
+                logger.debug(f"URL changed: {url_before} → {url_after}")
+                await self.wait_for_page_ready()
+            elif atype in (ActionType.CLICK, ActionType.PRESS, ActionType.TYPE):
+                # Even without URL change, these actions may trigger
+                # DOM updates (modals, lazy content). Brief settle.
+                await self._page.wait_for_timeout(800)
 
             logger.debug(f"Action OK: {action.to_dict()}")
             return True
@@ -268,23 +365,38 @@ class LiveEnvironment(BaseEnvironment):
     async def _try_js_interact(
         self, element_id: str, action: str = "click"
     ) -> bool:
-        """Try to interact with an element via JavaScript (scrolls into view first).
+        """Try to interact with an element via JavaScript.
 
-        This is the most reliable path — bypasses Playwright's actionability
-        checks and coordinate issues. Works even for off-screen elements.
-
-        Returns True if the element was found and interacted with.
+        Dispatches proper MouseEvents with real element-center coordinates.
+        Used as a FALLBACK when Playwright's native click fails.
         """
-        js_action = {
-            "click": "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); el.focus(); el.click();",
-            "focus": "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); el.focus();",
-            "select_all": (
-                "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); el.focus();"
-                "if (typeof el.select === 'function') { el.select(); }"
-                "else if (el.setSelectionRange) { el.setSelectionRange(0, el.value.length); }"
-                "else { el.click(); }"
-            ),
-        }.get(action, "el.click();")
+        if action == "click":
+            js_action = """
+                el.scrollIntoView({block: 'center', inline: 'center', behavior: 'auto'});
+                const r = el.getBoundingClientRect();
+                const cx = r.left + r.width / 2;
+                const cy = r.top + r.height / 2;
+                const opts = {view: window, bubbles: true, cancelable: true, clientX: cx, clientY: cy};
+                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                el.dispatchEvent(new MouseEvent('click', opts));
+                el.focus();
+            """
+        elif action == "focus":
+            js_action = """
+                el.scrollIntoView({block: 'center', inline: 'center', behavior: 'auto'});
+                el.focus();
+            """
+        elif action == "select_all":
+            js_action = """
+                el.scrollIntoView({block: 'center', inline: 'center', behavior: 'auto'});
+                el.focus();
+                if (typeof el.select === 'function') { el.select(); }
+                else if (el.setSelectionRange) { el.setSelectionRange(0, el.value.length); }
+                else { el.click(); }
+            """
+        else:
+            js_action = "el.click();"
 
         try:
             result = await self._page.evaluate(f"""
@@ -304,32 +416,46 @@ class LiveEnvironment(BaseEnvironment):
     async def _click_element(
         self, action: Action, bridge: DOMBridge | None
     ) -> None:
-        """Click an element: JS click first, then data-som-id selector, then coordinates."""
+        """Click an element using 3-layer fallback.
+
+        Priority: Playwright native → JS MouseEvent → coordinates.
+        Playwright's native click produces trusted events (isTrusted=true)
+        that websites cannot distinguish from real user clicks.
+        """
         eid = action.element_id
-
-        # 1) JS click via data-som-id (most reliable — scrolls into view)
-        if await self._try_js_interact(eid, "click"):
-            logger.debug(f"JS click OK on #{eid}")
-            return
-
-        # 2) Playwright click via data-som-id (scrolls into view automatically)
         selector = f"[data-som-id='{eid}']"
+
+        # 1) Playwright native click (force: bypass actionability checks)
         try:
-            await self._page.click(selector, timeout=3000)
-            logger.debug(f"Selector click OK on #{eid}")
+            await self._page.click(selector, timeout=3000, force=True)
+            logger.debug(f"Click OK on #{eid} (Playwright)")
             return
-        except Exception:
-            pass
+        except Exception as e1:
+            logger.debug(f"Playwright click failed on #{eid}: {e1}")
+
+        # 2) JS MouseEvent with proper coordinates
+        if await self._try_js_interact(eid, "click"):
+            logger.debug(f"Click OK on #{eid} (JS MouseEvent)")
+            return
 
         # 3) Coordinate fallback
-        cx, cy = await self._resolve_element_target(eid, bridge)
-        # Scroll page to center on target area before clicking
-        await self._page.evaluate(f"""
-            window.scrollBy({{ left: {cx} - window.innerWidth/2, top: {cy} - window.innerHeight/2, behavior: 'instant' }});
-        """)
-        await self._page.wait_for_timeout(100)
-        await self._page.mouse.click(self._viewport_w / 2, self._viewport_h / 2)
-        logger.debug(f"Coordinate click OK for #{eid} (scrolled to center)")
+        try:
+            cx, cy = await self._resolve_element_target(eid, bridge)
+            await self._page.evaluate(f"""
+                window.scrollBy({{ left: {cx} - window.innerWidth/2,
+                                  top: {cy} - window.innerHeight/2,
+                                  behavior: 'auto' }});
+            """)
+            await self._page.wait_for_timeout(100)
+            await self._page.mouse.click(self._viewport_w / 2, self._viewport_h / 2)
+            logger.debug(f"Click OK on #{eid} (coordinate)")
+            return
+        except ValueError:
+            pass
+
+        logger.warning(
+            f"FAILED to click #{eid}: not found by any method"
+        )
 
     async def _type_in_element(
         self, action: Action, bridge: DOMBridge | None
