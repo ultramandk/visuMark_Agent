@@ -36,11 +36,135 @@ class LiveEnvironment(BaseEnvironment):
 
     async def start(self, url: str = "about:blank") -> None:
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self._headless)
+
+        # ── Anti-detection: headless Chrome exposes many signals that
+        #     distinguish it from real Chrome.  We configure launch args,
+        #     browser context, and init scripts to produce a fingerprint
+        #     indistinguishable from a normal headed browser.
+        launch_args: list[str] = []
+        if self._headless:
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=Translate,OptimizationHints,MediaRouter",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-infobars",
+            ]
+
+        self._browser = await self._playwright.chromium.launch(
+            headless=self._headless,
+            args=launch_args,
+        )
+
+        # Context options matching a real Windows desktop Chrome
         self._context = await self._browser.new_context(
-            viewport={"width": self._viewport_w, "height": self._viewport_h}
+            viewport={"width": self._viewport_w, "height": self._viewport_h},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            screen={"width": 1920, "height": 1080},
+            device_scale_factor=1,
+            is_mobile=False,
+            has_touch=False,
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            permissions=["geolocation"],
+            geolocation={"latitude": 23.1291, "longitude": 113.2644},  # Guangzhou
+            color_scheme="light",
         )
         self._page = await self._context.new_page()
+
+        # Comprehensive navigator anti-detection.
+        # Overrides key detection signals on Navigator.prototype before
+        # any page JS runs.  plugins / mimeTypes / webdriver on the
+        # prototype are configurable (verified on Playwright 1.60).
+        if self._headless:
+            await self._page.add_init_script("""
+                (() => {
+                const NavProto = Object.getPrototypeOf(navigator);
+
+                // ── Fake PluginArray (headless has 0 plugins, real Chrome has 5) ──
+                const _P = (name) => ({
+                    get name() { return name; },
+                    get filename() { return ''; },
+                    get description() { return ''; },
+                    get length() { return 1; },
+                    item: () => null,
+                    namedItem: () => null,
+                });
+                const fakePlugins = [
+                    _P('Chrome PDF Plugin'),
+                    _P('Chrome PDF Viewer'),
+                    _P('Native Client'),
+                    _P('Widevine Content Decryption Module'),
+                    _P('Microsoft Edge PDF Plugin'),
+                ];
+                fakePlugins.item = (i) => fakePlugins[i] || null;
+                fakePlugins.namedItem = () => null;
+                fakePlugins.refresh = () => {};
+                Object.defineProperty(NavProto, 'plugins', {
+                    get: () => fakePlugins, configurable: true, enumerable: true,
+                });
+
+                // ── Fake MimeTypeArray ──
+                const _M = () => ({ get type() { return 'application/pdf'; }, get suffixes() { return 'pdf'; }, get description() { return ''; } });
+                const fakeMimeTypes = [_M(), _M(), _M(), _M()];
+                fakeMimeTypes.item = (i) => fakeMimeTypes[i] || null;
+                fakeMimeTypes.namedItem = () => null;
+                Object.defineProperty(NavProto, 'mimeTypes', {
+                    get: () => fakeMimeTypes, configurable: true, enumerable: true,
+                });
+
+                // ── webdriver ──
+                Object.defineProperty(NavProto, 'webdriver', {
+                    get: () => false, configurable: true,
+                });
+
+                // ── Instance-level overrides ──
+                try { Object.defineProperty(navigator, 'platform', { get: () => 'Win32' }); } catch(e) {}
+                try { Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 16 }); } catch(e) {}
+                try { Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 }); } catch(e) {}
+                try { Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en-US','en'] }); } catch(e) {}
+                try { Object.defineProperty(navigator, 'language', { get: () => 'zh-CN' }); } catch(e) {}
+                try { Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 }); } catch(e) {}
+
+                // ── Permissions ──
+                try {
+                    const _q = navigator.permissions.query.bind(navigator.permissions);
+                    navigator.permissions.query = (p) =>
+                        (p.name === 'notifications' || p.name === 'geolocation')
+                            ? Promise.resolve({ state: p.name === 'geolocation' ? 'granted' : 'prompt', onchange: null })
+                            : _q(p);
+                } catch(e) {}
+
+                // ── window.chrome (MUST exist — headless lacks it) ──
+                try {
+                    window.chrome = {
+                        runtime: { onConnect: { addListener: () => {} }, onMessage: { addListener: () => {} } },
+                        loadTimes: () => ({}),
+                        csi: () => ({}),
+                        app: {},
+                    };
+                } catch(e) {}
+
+                // ── Screen ──
+                try { Object.defineProperty(screen, 'colorDepth', { get: () => 24 }); } catch(e) {}
+                try { Object.defineProperty(screen, 'pixelDepth', { get: () => 24 }); } catch(e) {}
+                if (screen.width < 1280) {
+                    try { Object.defineProperty(screen, 'width', { get: () => 1920 }); } catch(e) {}
+                    try { Object.defineProperty(screen, 'availWidth', { get: () => 1920 }); } catch(e) {}
+                }
+                if (screen.height < 720) {
+                    try { Object.defineProperty(screen, 'height', { get: () => 1080 }); } catch(e) {}
+                    try { Object.defineProperty(screen, 'availHeight', { get: () => 1040 }); } catch(e) {}
+                }
+
+                // ── Window dimensions ──
+                try { Object.defineProperty(window, 'outerWidth', { get: () => 1920 }); } catch(e) {}
+                try { Object.defineProperty(window, 'outerHeight', { get: () => 1040 }); } catch(e) {}
+                })();
+            """)
         if url and url != "about:blank":
             try:
                 await self._page.goto(url, timeout=self._timeout, wait_until="domcontentloaded")
@@ -468,9 +592,18 @@ class LiveEnvironment(BaseEnvironment):
             logger.debug(f"Click OK on #{eid} (JS MouseEvent)")
             return
 
-        # 3) elementFromPoint: find the real element at the expected position.
-        #    On dynamic pages, data-som-id may be stale (DOM replaced), but
-        #    the visual position from the bridge is still approximately correct.
+        # 3) href navigation: extract href and goto directly.
+        #    Uses bridge coordinates as fallback when data-som-id is stale.
+        try:
+            cx, cy = await self._resolve_element_target(eid, bridge)
+            navigated = await self._navigate_to_href(eid, cx, cy)
+            if navigated:
+                logger.debug(f"Click OK on #{eid} (href navigation)")
+                return
+        except Exception:
+            pass
+
+        # 4) elementFromPoint: find the real element at the expected position.
         try:
             cx, cy = await self._resolve_element_target(eid, bridge)
             hit_ok = await self._click_at_point(cx, cy)
@@ -480,7 +613,7 @@ class LiveEnvironment(BaseEnvironment):
         except ValueError:
             pass
 
-        # 4) Coordinate fallback: scroll center to point, click screen center
+        # 5) Coordinate fallback: scroll center to point, click screen center
         try:
             cx, cy = await self._resolve_element_target(eid, bridge)
             await self._page.evaluate(f"""
@@ -498,6 +631,62 @@ class LiveEnvironment(BaseEnvironment):
         logger.warning(
             f"FAILED to click #{eid}: not found by any method"
         )
+
+    async def _navigate_to_href(
+        self, element_id: str, cx: float = 0, cy: float = 0
+    ) -> bool:
+        """Extract href from an element and navigate directly.
+
+        Strategies (tried in order):
+        1. Check [data-som-id] element for <a> tag or child <a>
+        2. elementsFromPoint at the element's position (survives stale DOM)
+        3. elementsFromPoint at provided cx, cy (fallback when DOM replaced)
+
+        Bypasses click interception on sites like Bing.
+        """
+        try:
+            href = await self._page.evaluate(f"""
+                (() => {{
+                    const el = document.querySelector('[data-som-id="{element_id}"]');
+
+                    // Strategy 1: check element + children (fast path)
+                    if (el) {{
+                        if (el.tagName === 'A' && el.href && el.href.startsWith('http')) return el.href;
+                        const inner = el.querySelector('a');
+                        if (inner && inner.href && inner.href.startsWith('http')) return inner.href;
+                        // elementsFromPoint at element position
+                        const r = el.getBoundingClientRect();
+                        return _scanPoint(r.left + r.width / 2, r.top + r.height / 2);
+                    }}
+
+                    // Strategy 2: elementsFromPoint at provided coordinates
+                    return _scanPoint({cx}, {cy});
+
+                    function _scanPoint(px, py) {{
+                        if (px <= 0 || py <= 0) return null;
+                        const all = document.elementsFromPoint(px, py);
+                        for (const c of all) {{
+                            if (c.tagName === 'A' && c.href && c.href.startsWith('http')) return c.href;
+                            let p = c.parentElement;
+                            for (let j = 0; j < 5 && p; j++) {{
+                                if (p.tagName === 'A' && p.href && p.href.startsWith('http')) return p.href;
+                                p = p.parentElement;
+                            }}
+                        }}
+                        return null;
+                    }}
+                }})()
+            """)
+            if not href:
+                logger.debug(f"_navigate_to_href #{element_id}: no href at ({cx:.0f},{cy:.0f})")
+                return False
+            logger.debug(f"_navigate_to_href #{element_id}: -> {href[:100]}")
+            await self._page.goto(href, timeout=self._timeout, wait_until="domcontentloaded")
+            await self.wait_for_page_ready()
+            return True
+        except Exception as exc:
+            logger.debug(f"_navigate_to_href #{element_id}: error - {exc}")
+            return False
 
     async def _click_at_point(self, cx: float, cy: float) -> bool:
         """Click whatever interactive element is at (cx, cy) using JS.
