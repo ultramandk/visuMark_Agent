@@ -258,174 +258,6 @@ html, body {
 }
 
 /* ==================================================================
-   Screenshot Panel
-   ================================================================== */
-.screenshot-panel {
-    width: 420px;
-    min-width: 320px;
-    background: var(--bg-surface);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    transition: width var(--transition-normal),
-                min-width var(--transition-normal),
-                opacity var(--transition-normal),
-                margin var(--transition-normal);
-    z-index: 5;
-    overflow: hidden;
-}
-.screenshot-panel.collapsed {
-    width: 0;
-    min-width: 0;
-    opacity: 0;
-    border-right-color: transparent;
-    margin-right: 0;
-}
-
-/* ---- Screenshot panel header ---- */
-.screenshot-panel-header {
-    padding: 13px 16px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-    background: var(--bg-elevated);
-}
-.screenshot-panel-header h3 {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: -0.2px;
-}
-.step-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 3px 10px;
-    border-radius: 20px;
-    background: rgba(94, 156, 255, 0.1);
-    color: var(--accent);
-    border: 1px solid rgba(94, 156, 255, 0.18);
-    white-space: nowrap;
-    transition: all var(--transition-fast);
-}
-.step-badge.active {
-    background: rgba(63, 185, 80, 0.1);
-    color: var(--success);
-    border-color: rgba(63, 185, 80, 0.25);
-    animation: pulse-badge 2s ease-in-out infinite;
-}
-@keyframes pulse-badge {
-    0%, 100% { box-shadow: 0 0 0 rgba(63, 185, 80, 0); }
-    50%      { box-shadow: 0 0 8px rgba(63, 185, 80, 0.35); }
-}
-
-/* ---- Screenshot container ---- */
-.screenshot-container {
-    flex: 1;
-    position: relative;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.3);
-    min-height: 0;
-}
-.screenshot-placeholder {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-    color: var(--text-muted);
-    transition: opacity var(--transition-fast);
-}
-.screenshot-placeholder.hidden {
-    display: none;
-}
-.screenshot-placeholder .placeholder-icon {
-    font-size: 56px;
-    opacity: 0.5;
-}
-.screenshot-placeholder p {
-    font-size: 13px;
-}
-#screenshot-img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    border-radius: 2px;
-    cursor: pointer;
-    transition: opacity 0.15s ease;
-}
-#screenshot-img.loaded {
-    opacity: 1;
-}
-#screenshot-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 2;
-}
-
-/* ---- Action overlay info bar ---- */
-.action-overlay-info {
-    padding: 10px 16px;
-    border-top: 1px solid var(--border);
-    background: var(--bg-elevated);
-    flex-shrink: 0;
-    min-height: 42px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.action-info-label {
-    font-size: 12px;
-    color: var(--text-muted);
-    font-weight: 500;
-    transition: color var(--transition-fast);
-}
-.action-info-label.highlight-action {
-    color: var(--accent);
-    font-weight: 600;
-}
-.action-info-label.highlight-success {
-    color: var(--success);
-    font-weight: 600;
-}
-.action-info-label.highlight-fail {
-    color: var(--error);
-    font-weight: 600;
-}
-
-/* ---- Toggle button in chat header ---- */
-.btn-toggle-screenshot {
-    background: none;
-    border: 1px solid transparent;
-    color: var(--text-secondary);
-    font-size: 16px;
-    cursor: pointer;
-    padding: 5px 9px;
-    border-radius: var(--radius-sm);
-    transition: all var(--transition-fast);
-    line-height: 1;
-}
-.btn-toggle-screenshot:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: var(--border);
-    color: var(--text-primary);
-}
-.btn-toggle-screenshot.active {
-    color: var(--accent);
-    border-color: var(--border-active);
-    background: rgba(94, 156, 255, 0.08);
-}
-
-/* ==================================================================
    Main Chat Area
    ================================================================== */
 .main {
@@ -629,6 +461,13 @@ html, body {
     color: var(--success);
     border: 1px solid rgba(63, 185, 80, 0.2);
 }
+.step-elements {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 2px 8px;
+    background: var(--bg-input);
+    border-radius: 10px;
+}
 .step-action.fail {
     background: rgba(248, 81, 73, 0.08);
     color: var(--error);
@@ -721,6 +560,62 @@ html, body {
 }
 
 /* ==================================================================
+   Progressive step phases — live updating bubble
+   ================================================================== */
+.step-phase {
+    margin-top: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.step-phase.reasoning {
+    background: rgba(94, 156, 255, 0.08);
+    border: 1px solid rgba(94, 156, 255, 0.2);
+    color: var(--accent);
+}
+.step-phase.acting {
+    background: rgba(176, 136, 247, 0.08);
+    border: 1px solid rgba(176, 136, 247, 0.2);
+    color: var(--accent-secondary);
+}
+.step-phase.verifying {
+    background: rgba(210, 153, 34, 0.07);
+    border: 1px solid rgba(210, 153, 34, 0.2);
+    color: var(--warning);
+}
+.step-phase .phase-icon { font-size: 16px; flex-shrink: 0; }
+.step-phase .phase-text { flex: 1; min-width: 0; }
+.step-phase .phase-timer {
+    font-size: 11px;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+    font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+}
+@keyframes pulse-think {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50%      { opacity: 1;   transform: scale(1.15); }
+}
+.step-phase.reasoning .phase-icon { animation: pulse-think 1.2s ease-in-out infinite; }
+@keyframes spin-verify {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+.step-phase.verifying .phase-icon { animation: spin-verify 1.5s linear infinite; }
+
+/* Timing summary */
+.step-timing {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* ==================================================================
    Verification Display — shows post-action verification result
    ================================================================== */
 .step-verification {
@@ -786,6 +681,40 @@ html, body {
 }
 .recovery-action.rollback { border-left: 2px solid var(--warning); }
 .recovery-action.retry { border-left: 2px solid var(--accent); }
+
+/* ==================================================================
+   CAPTCHA Message
+   ================================================================== */
+.message.captcha .bubble {
+    background: rgba(210, 153, 34, 0.06);
+    border: 2px solid rgba(210, 153, 34, 0.3);
+    border-radius: var(--radius-lg);
+    padding: 24px 28px;
+    text-align: center;
+    max-width: 480px;
+}
+.captcha-icon { font-size: 40px; margin-bottom: 10px; }
+.captcha-title {
+    font-size: 18px; font-weight: 700; color: var(--warning);
+    margin-bottom: 8px;
+}
+.captcha-text {
+    font-size: 13px; color: var(--text-secondary);
+    margin-bottom: 16px; line-height: 1.5;
+}
+.btn-continue {
+    display: inline-block;
+    padding: 10px 28px;
+    border-radius: 20px;
+    border: none;
+    background: var(--gradient-warm);
+    color: #fff;
+    font-size: 14px; font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+.btn-continue:hover { transform: translateY(-1px); box-shadow: var(--shadow-glow-blue); }
+.btn-continue:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
 /* ==================================================================
    Result Message
@@ -1188,17 +1117,6 @@ html, body {
         box-shadow: var(--shadow-lg);
     }
     .sidebar.collapsed { width: 0; min-width: 0; }
-    .screenshot-panel {
-        position: fixed;
-        right: 0;
-        top: 0;
-        height: 100%;
-        z-index: 100;
-        box-shadow: var(--shadow-lg);
-        width: 360px;
-        min-width: 360px;
-    }
-    .screenshot-panel.collapsed { width: 0; min-width: 0; }
     .chat-messages { padding: 14px 12px; gap: 12px; }
     .message { max-width: 95%; }
     .message.result { max-width: 90%; }

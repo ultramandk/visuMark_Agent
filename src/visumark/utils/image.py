@@ -4,7 +4,7 @@ import base64
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 def encode_base64(image_bytes: bytes) -> str:
@@ -96,3 +96,49 @@ def is_blank_screenshot(
         return std < variance_threshold
     except Exception:
         return False
+
+
+def highlight_element(
+    image_bytes: bytes,
+    bbox: tuple[float, float, float, float],
+    color: str = "#FF4444",
+    width: int = 4,
+) -> bytes:
+    """Draw a highlighted border around an element on the image.
+
+    Args:
+        image_bytes: PNG/JPEG bytes.
+        bbox: Normalized bounding box (x, y, w, h) in [0, 1].
+        color: Border color.
+        width: Border line width in pixels.
+
+    Returns:
+        Modified image bytes (PNG).
+    """
+    try:
+        img = Image.open(BytesIO(image_bytes)).convert("RGBA")
+        iw, ih = img.size
+        x1 = int(bbox[0] * iw)
+        y1 = int(bbox[1] * ih)
+        x2 = int((bbox[0] + bbox[2]) * iw)
+        y2 = int((bbox[1] + bbox[3]) * ih)
+
+        # Clamp to image bounds
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(iw, x2)
+        y2 = min(ih, y2)
+
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            return image_bytes  # Too small to highlight
+
+        draw = ImageDraw.Draw(img)
+        # Draw thick border
+        for offset in range(width):
+            draw.rectangle(
+                [x1 - offset, y1 - offset, x2 + offset, y2 + offset],
+                outline=color,
+            )
+        return image_to_bytes(img, "PNG")
+    except Exception:
+        return image_bytes

@@ -9,6 +9,7 @@ The frontend (static/index.html, app.js, style.css) is preserved as-is.
 This backend maintains the same WebSocket protocol expected by the frontend.
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -155,7 +156,7 @@ async def ws_agent(ws: WebSocket):
     api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
     base_url = config.get("base_url") or None
     max_steps = config.get("max_steps", 30)
-    headless = config.get("headless", True)
+    headless = config.get("headless", False)
 
     if not task_desc:
         await ws.send_json({"type": "error", "message": "Task description is required"})
@@ -197,7 +198,57 @@ async def ws_agent(ws: WebSocket):
         max_steps=max_steps,
     )
 
+    # Background listener for "continue" messages during CAPTCHA pause
+    agent_task: asyncio.Task | None = None
+
     class WSCallbacks(StepCallbacks):
+        async def on_captcha(self, screenshot: bytes) -> None:
+            b64 = base64.b64encode(screenshot).decode("utf-8") if screenshot else None
+            await ws.send_json({
+                "type": "captcha_required",
+                "screenshot": b64,
+                "message": "检测到验证码，请在浏览器窗口中手动完成操作后点击继续",
+            })
+
+        async def on_perceive(self, step: int, screenshot: bytes, elements_count: int) -> None:
+            b64 = base64.b64encode(screenshot).decode("utf-8") if screenshot else None
+            await ws.send_json({
+                "type": "step_phase",
+                "step": step,
+                "phase": "perceive",
+                "screenshot": b64,
+                "elements": elements_count,
+            })
+
+        async def on_reasoning(self, step: int) -> None:
+            await ws.send_json({
+                "type": "step_phase",
+                "step": step,
+                "phase": "reasoning",
+            })
+
+        async def on_acting(self, step: int, action, label: str, highlighted_screenshot: bytes | None = None) -> None:
+            b64_hs = None
+            if highlighted_screenshot:
+                b64_hs = base64.b64encode(highlighted_screenshot).decode("utf-8")
+            await ws.send_json({
+                "type": "step_phase",
+                "step": step,
+                "phase": "acting",
+                "action": action.action_type.value if action else None,
+                "element_id": action.element_id if action else None,
+                "value": action.value if action else None,
+                "label": label,
+                "highlighted_screenshot": b64_hs,
+            })
+
+        async def on_verifying(self, step: int) -> None:
+            await ws.send_json({
+                "type": "step_phase",
+                "step": step,
+                "phase": "verifying",
+            })
+
         async def on_step(self, record: StepRecord, bridge: DOMBridge) -> None:
             action_data = {}
             target_label = ""
@@ -265,14 +316,33 @@ async def ws_agent(ws: WebSocket):
         start_url=url,
     )
 
+    async def listen_for_continue():
+        """Background task: listen for 'continue' from client while agent runs."""
+        while True:
+            try:
+                raw = await ws.receive_text()
+                msg = json.loads(raw)
+                if msg.get("type") == "continue":
+                    agent.resume()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                pass
+
+    agent_task = asyncio.create_task(agent.run(task, callbacks=WSCallbacks()))
+    listener_task = asyncio.create_task(listen_for_continue())
+
+    # Wait for agent to finish, then cancel listener
     try:
-        await agent.run(task, callbacks=WSCallbacks())
+        await agent_task
     except Exception as exc:
         try:
             await ws.send_json({"type": "error", "message": str(exc)})
         except Exception:
             pass
     finally:
+        if listener_task and not listener_task.done():
+            listener_task.cancel()
         try:
             await ws.close()
         except Exception:

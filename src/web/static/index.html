@@ -26,30 +26,11 @@
             </div>
         </aside>
 
-        <!-- Screenshot Panel -->
-        <section class="screenshot-panel" id="screenshot-panel" aria-label="截图面板">
-            <div class="screenshot-panel-header">
-                <h3>📷 实时截图</h3>
-                <span class="step-badge" id="screenshot-step-badge">等待中</span>
-            </div>
-            <div class="screenshot-container" id="screenshot-container">
-                <div class="screenshot-placeholder" id="screenshot-placeholder">
-                    <span class="placeholder-icon">🖥️</span>
-                    <p>截图将在这里显示</p>
-                </div>
-                <img id="screenshot-img" src="" alt="当前页面截图" style="display:none" />
-                <canvas id="screenshot-overlay" style="display:none"></canvas>
-            </div>
-            <div class="action-overlay-info" id="action-overlay-info">
-                <span class="action-info-label">等待操作...</span>
-            </div>
-        </section>
 
         <!-- Main Chat Area -->
         <main class="main">
             <header class="chat-header">
                 <button class="btn-toggle-sidebar" id="btn-toggle-sidebar" title="切换侧边栏" aria-label="切换侧边栏">☰</button>
-                <button class="btn-toggle-screenshot" id="btn-toggle-screenshot" title="切换截图面板" aria-label="切换截图面板">🖼️</button>
                 <h2>Agent 对话</h2>
             </header>
 
@@ -67,6 +48,9 @@
                         </button>
                         <button class="example-chip" data-task="打开buff，查询精英之作的价格" data-url="https://www.bing.com">
                             🎮 Buff 精英之作
+                        </button>
+                        <button class="example-chip" data-task="登录QQ邮箱，给739862481@qq.com发送一封端午节祝福邮件，标题'端午安康'，正文简短的节日祝福即可" data-url="https://mail.qq.com">
+                            📧 QQ邮箱发端午祝福
                         </button>
                     </div>
                 </div>
@@ -134,10 +118,10 @@
                                 </label>
                                 <label>
                                     最大步数
-                                    <input type="number" id="setting-max-steps" value="15" min="1" max="50" />
+                                    <input type="number" id="setting-max-steps" value="30" min="1" max="50" />
                                 </label>
                                 <label class="checkbox-label">
-                                    <input type="checkbox" id="setting-headless" checked />
+                                    <input type="checkbox" id="setting-headless" />
                                     无头模式（后台运行浏览器）
                                 </label>
                             </div>

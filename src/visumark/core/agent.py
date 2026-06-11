@@ -13,6 +13,7 @@ Mind2Web offline evaluation. The only difference is the environment
 callback is attached.
 """
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -39,24 +40,48 @@ from visumark.dataset.base import TaskInstance
 # ---------------------------------------------------------------------------
 
 class StepCallbacks:
-    """Hooks invoked after each agent step.
+    """Hooks invoked at each phase of an agent step.
 
-    Used for:
-        - WebSocket streaming (push step data to frontend)
-        - Saving screenshots to disk
-        - Mind2Web evaluation (compare prediction vs ground truth)
+    Phases (in order):
+        1. on_perceive   — screenshot + elements ready
+        2. on_reasoning  — VLM call started
+        3. on_acting     — action decided, about to execute
+        4. on_verifying  — post-action verification started
+        5. on_step       — step fully complete (final)
+
+    The frontend uses these to progressively render each step.
     """
+
+    async def on_perceive(self, step: int, screenshot: bytes, elements_count: int) -> None:
+        """Screenshot ready — frontend can show it immediately."""
+        pass
+
+    async def on_reasoning(self, step: int) -> None:
+        """VLM call started — frontend can show thinking animation."""
+        pass
+
+    async def on_acting(self, step: int, action: Action, label: str, highlighted_screenshot: bytes | None = None) -> None:
+        """Action decided — frontend can show what will be executed, with target highlight."""
+        pass
+
+    async def on_verifying(self, step: int) -> None:
+        """Verification started — frontend can show verifying animation."""
+        pass
 
     async def on_step(
         self,
         record: StepRecord,
         bridge: DOMBridge,
     ) -> None:
-        """Called after each step completes."""
+        """Step complete — frontend shows final result."""
+        pass
+
+    async def on_captcha(self, screenshot: bytes) -> None:
+        """CAPTCHA detected — agent pauses for manual intervention."""
         pass
 
     async def on_done(self, record: TaskRecord) -> None:
-        """Called when the task finishes."""
+        """Task finished."""
         pass
 
 
@@ -98,6 +123,15 @@ class Agent:
         self.parser = ActionParser()
         self.executor = ActionExecutor()
 
+        # CAPTCHA pause/resume
+        self._paused = asyncio.Event()
+        self._paused.set()  # Initial: not paused
+
+    def resume(self) -> None:
+        """Resume agent after manual CAPTCHA completion."""
+        self._paused.set()
+        logger.info("Agent resumed after CAPTCHA")
+
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
@@ -134,6 +168,7 @@ class Agent:
                     step=step_num,
                     task_description=task.description,
                     history=result.steps,
+                    callbacks=callbacks,
                 )
                 result.steps.append(record)
 
@@ -158,6 +193,14 @@ class Agent:
                     result.error = record.action.value or "Agent declared failure"
                     logger.error(f"Agent failed: {result.error}")
                     break
+
+                if record.action.action_type == ActionType.CAPTCHA:
+                    logger.info("CAPTCHA detected — pausing for manual intervention")
+                    await callbacks.on_captcha(record.perception.screenshot)
+                    self._paused.clear()
+                    await self._paused.wait()
+                    logger.info("CAPTCHA resolved — resuming")
+                    continue  # Re-perceive the page on next iteration
 
             else:
                 result.error = (
@@ -191,6 +234,156 @@ class Agent:
             logger.debug(f"Failed to clear screenshots: {exc}")
 
     # ------------------------------------------------------------------
+    # Login page detection
+    # ------------------------------------------------------------------
+
+    async def _detect_login_page(self, perception) -> bool:
+        """Check if the current page is a login/authentication page.
+
+        Runs a lightweight JS check for password fields, login buttons,
+        QR code prompts — common indicators on login pages.  Much more
+        reliable than relying on an 8B VLM to follow complex rules.
+        """
+        if not self.env.is_live:
+            return False
+
+        page = self.env.page if hasattr(self.env, "page") else None
+        if page is None:
+            return False
+
+        try:
+            # Check page-level indicators via JS
+            result = await page.evaluate("""() => {
+                // Password fields — strongest signal
+                if (document.querySelector('input[type="password"]')) return true;
+
+                // Collect all visible text in the main area
+                const body = (document.body || document.documentElement).innerText || '';
+                const lower = body.toLowerCase();
+
+                // QR code login indicators
+                const qrWords = ['扫码登录', '二维码登录', '扫一扫登录', '扫码', 'scan to login',
+                                 'qr code', 'scan qr', '微信登录', 'qq登录', 'alipay'];
+                for (const w of qrWords) {
+                    if (lower.includes(w)) return true;
+                }
+
+                // Login page title / heading patterns
+                const loginPatterns = ['登录你的', '登录您的', '登入你的', '帐号登录',
+                                       '账号登录', '密码登录', '安全登录', 'sign in to'];
+                for (const p of loginPatterns) {
+                    if (lower.includes(p)) return true;
+                }
+
+                // Multiple login method buttons (QQ邮箱 home page pattern)
+                const loginBtnCount = document.querySelectorAll(
+                    '[class*="login"], [class*="Login"], [id*="login"], [id*="Login"]'
+                ).length;
+                if (loginBtnCount >= 3) return true;
+
+                return false;
+            }""")
+            return bool(result)
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
+    # DOM stability detection
+    # ------------------------------------------------------------------
+
+    async def _wait_for_dom_stable(
+        self,
+        page,
+        poll_interval_ms: int = 400,
+        max_polls: int = 8,
+    ) -> None:
+        """Wait for the DOM to stop changing after an action.
+
+        Compares body.innerHTML.length across consecutive polls.  When
+        two consecutive samples are equal, the DOM has stabilized.
+        This catches async rendering (React dialogs, validation messages)
+        that appear after the initial page load.
+        """
+        prev_len = -1
+        for i in range(max_polls):
+            try:
+                curr_len = await page.evaluate(
+                    "() => (document.body ? document.body.innerHTML.length : 0)"
+                )
+            except Exception:
+                break
+
+            if curr_len == prev_len and prev_len >= 0:
+                logger.debug(f"DOM stable after {(i + 1) * poll_interval_ms}ms ({curr_len} bytes)")
+                return
+
+            prev_len = curr_len
+            await asyncio.sleep(poll_interval_ms / 1000)
+
+        logger.debug(f"DOM did not stabilize after {max_polls * poll_interval_ms}ms — proceeding anyway")
+
+    # ------------------------------------------------------------------
+    # Page error detection
+    # ------------------------------------------------------------------
+
+    async def _detect_page_error(self, page) -> str | None:
+        """Scan the DOM for visible error dialogs, alerts, or validation
+        messages that indicate the last action failed.
+
+        Handles QQ Mail's xmail-ui-dialog, generic ARIA alerts, and
+        common error toast/card patterns.
+        """
+        try:
+            error_text = await page.evaluate("""() => {
+                // 1) Visible dialogs with error-related text
+                const dialogSel = [
+                    '.xmail-ui-dialog', '[class*="dialog"]', '[class*="modal"]',
+                    '[class*="popup"]', '[class*="toast"]', '[class*="alert"]',
+                    '[class*="message"]', '[role="dialog"]', '[role="alertdialog"]',
+                    '[role="alert"]',
+                ];
+                for (const sel of dialogSel) {
+                    const el = document.querySelector(sel);
+                    if (!el || el.offsetParent === null) continue;  // hidden
+                    const text = (el.innerText || el.textContent || '').trim();
+                    if (!text || text.length > 500) continue;
+                    // Check for error-related keywords
+                    const lower = text.toLowerCase();
+                    const isError =
+                        lower.includes('错误') || lower.includes('失败') ||
+                        lower.includes('格式') || lower.includes('无效') ||
+                        lower.includes('不存在') || lower.includes('无法') ||
+                        lower.includes('error') || lower.includes('fail') ||
+                        lower.includes('invalid') || lower.includes('wrong');
+                    if (isError) return text.substring(0, 300);
+                }
+
+                // 2) QQ Mail specific: ui-dialog-title-text
+                const titleEl = document.querySelector('.ui-dialog-title-text');
+                if (titleEl && titleEl.offsetParent !== null) {
+                    const text = titleEl.innerText.trim();
+                    if (text) return text;
+                }
+
+                // 3) Form validation messages near focused/red inputs
+                const errMsgs = document.querySelectorAll(
+                    '[class*="error"], [class*="err-msg"], [class*="err_msg"], ' +
+                    '[class*="form-error"], [class*="validate-msg"], ' +
+                    '.xmail-ui-form-item-explain-error'
+                );
+                for (const el of errMsgs) {
+                    if (el.offsetParent === null) continue;
+                    const text = (el.innerText || '').trim();
+                    if (text && text.length < 300) return text;
+                }
+
+                return null;
+            }""")
+            return error_text if error_text else None
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
     # Action verification — post-action before/after comparison
     # ------------------------------------------------------------------
 
@@ -220,25 +413,12 @@ class Agent:
         if page is None:
             return None, empty
 
-        # Wait for page to actually finish rendering before screenshot.
-        # Uses the same layered approach as perception: DOM ready → network
-        # idle → poll for visible content → extra settle for images/fonts.
-        # Shorter timeouts than perception since the page should already be
-        # mostly loaded from the execute() post-action wait.
-        if hasattr(self.env, "wait_for_page_ready"):
-            try:
-                await self.env.wait_for_page_ready(
-                    settle_ms=800,       # shorter settle than perception's 2000ms
-                    min_body_text=30,    # lower bar — just need the page to exist
-                    max_polls=8,         # max ~4s wait vs perception's ~10s
-                )
-            except Exception:
-                pass
-        else:
-            try:
-                await page.wait_for_timeout(800)
-            except Exception:
-                pass
+        # Wait for DOM to stabilize before taking the post-action screenshot.
+        # Actions like CLICK can trigger async rendering (React dialogs,
+        # form validation messages) that appear AFTER the initial page load.
+        # We poll body.innerHTML.length — when two consecutive samples match,
+        # the DOM has finished changing.
+        await self._wait_for_dom_stable(page)
 
         # Take post-action screenshot
         try:
@@ -255,6 +435,19 @@ class Agent:
                 effect_achieved=False,
                 observation="Post-action screenshot is blank — page may have crashed",
                 should_retry=False,
+            ), post_screenshot
+
+        # Check DOM for error dialogs / validation messages BEFORE VLM.
+        # Error dialogs (like QQ Mail "收件人地址格式错误") are persistent
+        # DOM elements that the VLM might miss because the screenshot shows
+        # the page BEHIND the semi-transparent mask.
+        error_text = await self._detect_page_error(page)
+        if error_text:
+            logger.warning(f"DOM error detected: {error_text[:120]}")
+            return VerificationResult(
+                effect_achieved=False,
+                observation=f"Page error: {error_text}",
+                should_retry=True,
             ), post_screenshot
 
         try:
@@ -280,33 +473,56 @@ class Agent:
         step: int,
         task_description: str,
         history: list,
+        callbacks: StepCallbacks | None = None,
     ) -> StepRecord:
         """Run a single observe → reason → act cycle.
 
-        Returns a StepRecord with full details for logging and evaluation.
+        Calls phase callbacks for progressive frontend rendering.
         """
         t0 = time.time()
+        cb = callbacks or StepCallbacks()
 
         # 1. PERCEIVE
         perception, bridge = await self.perceptor.perceive(self.env)
 
-        # Save screenshots for debugging (both clean and SoM-annotated)
+        # Save screenshots for debugging
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         if perception.screenshot:
-            path_clean = self.screenshot_dir / f"step_{step:03d}_clean.jpg"
-            path_clean.write_bytes(perception.screenshot)
+            (self.screenshot_dir / f"step_{step:03d}_clean.jpg").write_bytes(perception.screenshot)
         if perception.annotated_screenshot:
-            path_anno = self.screenshot_dir / f"step_{step:03d}_som.jpg"
-            path_anno.write_bytes(perception.annotated_screenshot)
+            (self.screenshot_dir / f"step_{step:03d}_som.jpg").write_bytes(perception.annotated_screenshot)
+
+        # Phase callback: screenshot ready
+        await cb.on_perceive(
+            step,
+            perception.screenshot or b"",
+            len(perception.elements),
+        )
+
+        # ── Programmatic login page detection ──
+        # Check the page for login indicators (password fields, login buttons,
+        # QR codes).  If found, pause immediately without VLM — 8B models
+        # often fail to follow complex conditional rules about login pages.
+        is_login_page = await self._detect_login_page(perception)
+        if is_login_page:
+            logger.info("Login page detected programmatically — pausing")
+            await cb.on_captcha(perception.screenshot)
+            self._paused.clear()
+            await self._paused.wait()
+            # Re-perceive after manual login
+            perception, bridge = await self.perceptor.perceive(self.env)
+            await cb.on_perceive(step, perception.screenshot or b"", len(perception.elements))
+            # Fall through to reasoning — let VLM decide next action on logged-in page
 
         # 2. REASON (with retry)
+        await cb.on_reasoning(step)
         reasoner_output = None
         for retry in range(self.max_retries if self.retry_on_error else 1):
             try:
                 reasoner_output = await self.reasoner.reason(
                     perception,
                     task_description,
-                    history,  # Pass history so VLM knows what failed
+                    history,
                 )
                 break
             except ParseError as e:
@@ -327,6 +543,18 @@ class Agent:
 
         action = reasoner_output.action
 
+        # Phase callback: action decided — with target highlight
+        action_label = build_target_label(action, bridge) if action else ""
+        highlighted_screenshot = None
+        if action and action.element_id and perception.annotated_screenshot:
+            target_bbox = bridge.get_bbox(action.element_id)
+            if target_bbox:
+                from visumark.utils.image import highlight_element
+                highlighted_screenshot = highlight_element(
+                    perception.annotated_screenshot, target_bbox
+                )
+        await cb.on_acting(step, action, action_label, highlighted_screenshot)
+
         # 3. ACT
         success = False
         if self.env.is_live and action is not None:
@@ -337,13 +565,15 @@ class Agent:
         # 4. VERIFY — compare before/after to check if the action worked
         verification = None
         post_screenshot = None
-        if (
+        verify_needed = (
             self.verify_actions
             and action is not None
             and not action.is_terminal
             and self.env.is_live
             and perception.annotated_screenshot
-        ):
+        )
+        if verify_needed:
+            await cb.on_verifying(step)
             pre_img = perception.annotated_screenshot
             for v_retry in range(self.max_verify_retries + 1):
                 verification, post_screenshot = await self._verify_action(

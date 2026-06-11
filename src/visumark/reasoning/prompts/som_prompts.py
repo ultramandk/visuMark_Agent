@@ -27,16 +27,19 @@ Your task: analyze the screenshot and decide the NEXT action to complete the use
 
 ## Response Format
 
-Respond with a JSON object. Include your reasoning in the "thought" field:
+Respond with a JSON object:
 
 ```json
 {
-    "thought": "Brief analysis of what you see and what needs to happen next",
+    "plan": "Brief 1-sentence summary of your overall plan (e.g. '填写收件人、标题、正文，然后发送邮件')",
+    "thought": "Brief analysis of what you see NOW and what needs to happen next",
     "action": "<action_type>",
     "element_id": "<number>",
     "value": "<text>"
 }
 ```
+
+The "plan" field should describe your HIGH-LEVEL goal — what you intend to accomplish.  Keep it updated: if the situation changes (error dialog, wrong page), update the plan accordingly.  The plan persists across steps and helps you remember what you were doing.
 
 ## Available Actions
 
@@ -63,13 +66,25 @@ Respond with a JSON object. Include your reasoning in the "thought" field:
 7. Action names must be lowercase: click, type, select, scroll, goto, press, answer, fail.
 8. Output ONLY the JSON object — no markdown fences, no extra text.
 9. Use EXACT format: {"action": "click", "element_id": "3"} — DO NOT use shorthand like "click #3".
+10. If you see a CAPTCHA, human verification, slider, puzzle, SMS code, QR code scan, or any anti-bot challenge → output {"action": "captcha", "value": "需要人工完成验证"}. Do NOT attempt to solve it yourself.
+
+11. !! CRITICAL — LOGIN PAGES !!
+You do NOT have any usernames, passwords, or credentials. You CANNOT log in by yourself.
+If the current page is ANY kind of login or authentication page — including but not limited to:
+   - Username/password fields
+   - QR code login (WeChat/QQ/Alipay scan)
+   - 登录 / 登入 / Sign in / Log in buttons
+   - Account selection pages
+   - SMS/phone verification
+   - 微信登录 / QQ登录 / 邮箱登录 options
+→ IMMEDIATELY output {"action": "captcha", "value": "需要人工登录"}.
+Do NOT click any login buttons. Do NOT try to fill in credentials. Do NOT attempt to navigate away. Just STOP and let the human handle it.
 
 ## CORRECT examples
 
-{"action": "click", "element_id": "5"}
-{"action": "type", "element_id": "3", "value": "search query"}
-{"action": "press", "value": "Enter"}
-{"action": "scroll", "value": "down"}
+{"plan": "搜索中山大学南校园的位置", "thought": "需要输入查询词", "action": "type", "element_id": "3", "value": "中山大学广州校区南校园在哪里"}
+{"plan": "填写收件人地址后发送邮件", "thought": "需要先点击收件人输入框", "action": "click", "element_id": "5"}
+{"plan": "关闭错误提示后修正收件人格式", "thought": "弹窗提示格式错误，先关闭", "action": "click", "element_id": "12"}
 
 ## WRONG examples (NEVER do this)
 
@@ -116,6 +131,16 @@ def build_som_user_prompt(
         f"## Current Page\nTitle: {perception.page_title}\nURL: {perception.page_url}",
     ]
 
+    # Include most recent plan for continuity
+    if history:
+        last_plan = None
+        for rec in reversed(history):
+            if rec.reasoner_output and rec.reasoner_output.plan:
+                last_plan = rec.reasoner_output.plan
+                break
+        if last_plan:
+            parts.append(f"## Current Plan\n{last_plan}")
+
     # Include recent step history for context (last 5 steps)
     if history:
         recent = history[-5:]
@@ -156,7 +181,8 @@ def build_som_user_prompt(
     parts.append(
         "## Instruction\n"
         "Look at the marked screenshot above. What is the NEXT action?\n"
-        "Return ONLY the JSON object with your thought and action."
+        "If the Current Plan above still applies, keep it. If the situation has changed (errors, wrong page), update the plan to reflect your new goal.\n"
+        "Return ONLY the JSON object with your plan, thought, and action."
     )
 
     return "\n\n".join(parts)

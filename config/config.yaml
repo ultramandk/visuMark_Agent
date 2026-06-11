@@ -3,7 +3,7 @@
 
 agent:
   mode: som                     # "som" (primary: visual SoM + VLM) | "html" (auxiliary: text HTML + LLM)
-  max_steps: 15
+  max_steps: 30
   retry_on_error: true
   max_retries: 3
   verify_actions: true          # Post-action verification: compare before/after screenshots
@@ -43,7 +43,7 @@ reasoning:
 # ---------------------------------------------------------------------------
 environment:
   type: live                    # "live" (real browser) | "offline" (cached snapshots)
-  headless: true
+  headless: false
   viewport_width: 1280
   viewport_height: 720
   timeout: 30000                # ms per action

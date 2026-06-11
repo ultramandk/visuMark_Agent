@@ -158,12 +158,14 @@ def _build_extraction_js(
         return tag;
     }}
 
-    // 1. Query all interactive elements
+    // 1. Query all interactive elements via CSS selectors
     const all = document.querySelectorAll(SELECTOR);
     const candidates = [];
+    const seenElements = new Set();
 
     for (let el of all) {{
         if (candidates.length >= MAX) break;
+        seenElements.add(el);
 
         // Visibility check
         const style = window.getComputedStyle(el);
@@ -178,9 +180,17 @@ def _build_extraction_js(
         // Interactive HTML tags (button, a, input, etc.) and aria-label
         // elements are often small icon buttons. Use a lower threshold.
         const hasAriaLabel = !!el.getAttribute('aria-label');
+        // cursor: pointer + short text catches framework buttons
+        // (React/Vue event delegation where DOM has zero interactive markers).
+        // Restrict to short text (≤8 chars) to avoid false positives from
+        // decorative elements and long text links that happen to have pointer cursor.
+        const rawText = (el.innerText || el.textContent || '').trim();
+        const hasPointerCursor = style.cursor === 'pointer';
+        const isFrameworkButton = hasPointerCursor && rawText.length >= 1 && rawText.length <= 8;
         const isKnownInteractive = INTERACTIVE_TAGS.has(tag)
-            || el.getAttribute('role') && INTERACTIVE_ROLES.has(el.getAttribute('role'))
-            || hasAriaLabel;
+            || (!!el.getAttribute('role') && INTERACTIVE_ROLES.has(el.getAttribute('role')))
+            || hasAriaLabel
+            || isFrameworkButton;
         const sizeThreshold = isKnownInteractive ? 1 : MIN_SIZE;
 
         // ── Parent bbox inheritance for tiny children ──
@@ -255,6 +265,54 @@ def _build_extraction_js(
         }});
     }}
 
+    // ── SPA supplement: scan ALL visible elements with cursor:pointer
+    //     that were missed by CSS selectors.  React/Vue SPAs render
+    //     buttons as <span>/<div> with zero HTML attributes — only
+    //     cursor:pointer distinguishes them from plain text.
+    if (candidates.length < MAX) {{
+        const allElements = document.querySelectorAll('*');
+        for (const el of allElements) {{
+            if (candidates.length >= MAX) break;
+            if (seenElements.has(el)) continue;
+
+            const tag = el.tagName.toLowerCase();
+            // Skip structural / non-interactive tags
+            if (tag === 'html' || tag === 'body' || tag === 'head' ||
+                tag === 'script' || tag === 'style' || tag === 'meta' ||
+                tag === 'link' || tag === 'br' || tag === 'hr') continue;
+
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') continue;
+            if (style.cursor !== 'pointer') continue;
+
+            const rect = el.getBoundingClientRect();
+            const area = rect.width * rect.height;
+            if (area < 1 || area > 500000) continue;
+            if (rect.bottom < -500 || rect.top > VH + 500) continue;
+            if (rect.right < -500 || rect.left > VW + 500) continue;
+
+            const text = getText(el);
+            if (!text) continue;  // Must have visible text
+
+            const attrs = {{}};
+            for (const k of KEY_ATTRS) {{
+                const v = el.getAttribute(k);
+                if (v !== null && v !== '') attrs[k] = v;
+            }}
+            const backendId = attrs['data-backend-node-id'] || null;
+            const selector = buildSelector(tag, attrs);
+
+            candidates.push({{
+                tag: tag, text: text,
+                x: rect.x, y: rect.y, w: rect.width, h: rect.height,
+                attributes: attrs,
+                backend_node_id: backendId,
+                selector: selector,
+            }});
+        }}
+        console.debug('SPA fallback scan: found', candidates.length, 'cursor-pointer elements');
+    }}
+
     // 2. Sort by visual position: top→bottom, left→right
     candidates.sort((a, b) => {{
         const dy = a.y - b.y;
@@ -267,20 +325,21 @@ def _build_extraction_js(
         const id = i + 1;
         candidates[i].id = id;
 
-        // Find the element and tag it with data-som-id.
-        // Use the same selector we built — all within this atomic JS call.
+        // Tag the EXACT element with data-som-id using elementFromPoint.
+        // CSS selectors are ambiguous for SPA pages where many elements
+        // share the same tag/class (e.g. multiple <div.xmail-ui-btn>).
+        // elementFromPoint at bbox center finds the actual element under
+        // the cursor, not the first match of a generic selector.
         try {{
-            const el = document.querySelector(candidates[i].selector);
-            if (el) {{
-                el.setAttribute('data-som-id', String(id));
+            const cx = candidates[i].x + candidates[i].w / 2;
+            const cy = candidates[i].y + candidates[i].h / 2;
+            const atPoint = document.elementFromPoint(cx, cy);
+            if (atPoint && atPoint !== document.body && atPoint !== document.documentElement) {{
+                atPoint.setAttribute('data-som-id', String(id));
             }} else {{
-                // Fallback: try elementFromPoint at bbox center
-                const cx = candidates[i].x + candidates[i].w / 2;
-                const cy = candidates[i].y + candidates[i].h / 2;
-                const atPoint = document.elementFromPoint(cx, cy);
-                if (atPoint) {{
-                    atPoint.setAttribute('data-som-id', String(id));
-                }}
+                // Fallback: CSS selector
+                const el = document.querySelector(candidates[i].selector);
+                if (el) el.setAttribute('data-som-id', String(id));
             }}
         }} catch(e) {{
             // Element gone — but data is still valid for annotation

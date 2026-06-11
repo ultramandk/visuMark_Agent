@@ -32,6 +32,7 @@ class ActionType(str, Enum):
     WAIT = "wait"          # Wait for a duration
     ANSWER = "answer"      # Task completed — return answer
     FAIL = "fail"          # Task impossible — return reason
+    CAPTCHA = "captcha"    # CAPTCHA detected — pause for manual intervention
 
 
 @dataclass
@@ -156,11 +157,14 @@ class ReasonerOutput:
     Attributes:
         raw_text: The raw text response from the model.
         thought: Chain-of-thought reasoning extracted from the response.
+        plan: High-level plan for future steps — carries intent forward
+            so the model remembers "what I was trying to do" across steps.
         action: Parsed action, or None if parsing failed.
     """
 
     raw_text: str
     thought: str = ""
+    plan: str = ""
     action: Action | None = None
 
 

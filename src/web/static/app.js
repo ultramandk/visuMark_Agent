@@ -17,12 +17,6 @@ const MAX_RECONNECT_DELAY = 10000; // 10 seconds max
 const HISTORY_KEY = "visumark_history";
 const SETTINGS_KEY = "visumark_settings";
 const SIDEBAR_KEY = "visumark_sidebar_collapsed";
-const SCREENSHOT_PANEL_KEY = "visumark_screenshot_collapsed";
-
-// Screenshot panel state
-let currentScreenshot = null;
-let currentTargetBbox = null;
-let currentActionLabel = null;
 
 // ============================================================================
 // DOM references
@@ -38,15 +32,7 @@ const btnAdvanced = $("#btn-advanced");
 const advancedSettings = $("#advanced-settings");
 const btnNewTask = $("#btn-new-task");
 const btnToggleSidebar = $("#btn-toggle-sidebar");
-const btnToggleScreenshot = $("#btn-toggle-screenshot");
 const sidebar = $("#sidebar");
-const screenshotPanel = $("#screenshot-panel");
-const screenshotImg = $("#screenshot-img");
-const screenshotOverlay = $("#screenshot-overlay");
-const screenshotPlaceholder = $("#screenshot-placeholder");
-const screenshotStepBadge = $("#screenshot-step-badge");
-const actionOverlayInfo = $("#action-overlay-info");
-const actionInfoLabel = actionOverlayInfo ? actionOverlayInfo.querySelector(".action-info-label") : null;
 const statusDot = $("#status-dot");
 const statusText = $("#status-text");
 const lightbox = $("#lightbox");
@@ -165,8 +151,8 @@ function loadSettings() {
             settingModel.value = saved.model || "qwen3-vl-8b-instruct";
             settingApiKey.value = saved.apiKey || "";
             settingBaseUrl.value = saved.baseUrl || "";
-            settingMaxSteps.value = saved.maxSteps || 15;
-            settingHeadless.checked = saved.headless !== false;
+            settingMaxSteps.value = saved.maxSteps || 30;
+            settingHeadless.checked = saved.headless === true;
         }
     } catch { /* ignore */ }
 }
@@ -200,193 +186,6 @@ function loadSidebarState() {
 
 function saveSidebarState() {
     localStorage.setItem(SIDEBAR_KEY, sidebar.classList.contains("collapsed"));
-}
-
-// ============================================================================
-// Screenshot Panel Persistence
-// ============================================================================
-
-function loadScreenshotPanelState() {
-    try {
-        if (localStorage.getItem(SCREENSHOT_PANEL_KEY) === "true") {
-            screenshotPanel.classList.add("collapsed");
-            btnToggleScreenshot.classList.add("active");
-        }
-    } catch { /* ignore */ }
-}
-
-function saveScreenshotPanelState() {
-    localStorage.setItem(SCREENSHOT_PANEL_KEY, screenshotPanel.classList.contains("collapsed"));
-}
-
-// ============================================================================
-// Screenshot Panel — update & highlight logic
-// ============================================================================
-
-function updateScreenshotPanel(screenshotBase64, targetBbox, targetLabel, stepNum, success) {
-    if (!screenshotPanel || !screenshotImg || !screenshotOverlay) return;
-
-    // Update step badge
-    if (screenshotStepBadge) {
-        screenshotStepBadge.textContent = stepNum ? `第 ${stepNum} 步` : "等待中";
-        screenshotStepBadge.classList.toggle("active", !!stepNum);
-    }
-
-    // Show the image, hide placeholder
-    if (screenshotPlaceholder) screenshotPlaceholder.classList.add("hidden");
-    screenshotImg.style.display = "block";
-    screenshotOverlay.style.display = "block";
-
-    // Set new screenshot
-    screenshotImg.src = "data:image/png;base64," + screenshotBase64;
-
-    // Wait for image to load, then resize canvas and draw highlight
-    screenshotImg.onload = function () {
-        // Resize canvas to match displayed image size
-        var rect = screenshotImg.getBoundingClientRect();
-        var containerRect = screenshotOverlay.parentElement.getBoundingClientRect();
-        screenshotOverlay.width = rect.width;
-        screenshotOverlay.height = rect.height;
-        screenshotOverlay.style.width = rect.width + "px";
-        screenshotOverlay.style.height = rect.height + "px";
-        screenshotOverlay.style.left = rect.left - containerRect.left + "px";
-        screenshotOverlay.style.top = rect.top - containerRect.top + "px";
-
-        // Draw target highlight if bbox provided
-        if (targetBbox && targetBbox.length === 4) {
-            drawTargetHighlight(screenshotOverlay, targetBbox, targetLabel);
-        } else {
-            clearHighlight(screenshotOverlay);
-        }
-    };
-
-    // Update action info bar
-    updateActionInfo(targetLabel, success);
-
-    // Store current state
-    currentScreenshot = screenshotBase64;
-    currentTargetBbox = targetBbox;
-    currentActionLabel = targetLabel;
-}
-
-function drawTargetHighlight(canvas, bbox, label) {
-    var ctx = canvas.getContext("2d");
-    var w = canvas.width;
-    var h = canvas.height;
-
-    // Clear previous drawing
-    ctx.clearRect(0, 0, w, h);
-
-    // Convert normalized bbox to pixel coordinates
-    var x = bbox[0] * w;
-    var y = bbox[1] * h;
-    var bw = bbox[2] * w;
-    var bh = bbox[3] * h;
-
-    // Clamp to canvas bounds
-    x = Math.max(0, x);
-    y = Math.max(0, y);
-    bw = Math.min(bw, w - x);
-    bh = Math.min(bh, h - y);
-
-    if (bw < 4 || bh < 4) return; // too small, skip
-
-    // Draw semi-transparent fill
-    ctx.fillStyle = "rgba(63, 185, 80, 0.12)";
-    ctx.fillRect(x, y, bw, bh);
-
-    // Draw border with glow effect
-    ctx.shadowColor = "rgba(63, 185, 80, 0.7)";
-    ctx.shadowBlur = 8;
-    ctx.strokeStyle = "#3fb950";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, bw, bh);
-
-    // Reset shadow for text
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-
-    // Draw label badge
-    if (label) {
-        var fontSize = Math.max(11, Math.min(13, bw / label.length * 1.8));
-        ctx.font = "bold " + fontSize + "px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', sans-serif";
-        var textMetrics = ctx.measureText(label);
-        var tw = textMetrics.width;
-        var th = fontSize + 4;
-        var padding = 6;
-
-        // Label background
-        var lx = x;
-        var ly = Math.max(0, y - th - padding * 2);
-        // If label would go above canvas, put it inside the rect at the top
-        if (ly < 4) {
-            ly = y + 4;
-        }
-
-        ctx.fillStyle = "rgba(63, 185, 80, 0.92)";
-        var rx = lx + tw + padding * 2;
-        var ry = ly + th + padding;
-        var radius = 4;
-        ctx.beginPath();
-        ctx.moveTo(lx + radius, ly);
-        ctx.lineTo(rx - radius, ly);
-        ctx.quadraticCurveTo(rx, ly, rx, ly + radius);
-        ctx.lineTo(rx, ry - radius);
-        ctx.quadraticCurveTo(rx, ry, rx - radius, ry);
-        ctx.lineTo(lx + radius, ry);
-        ctx.quadraticCurveTo(lx, ry, lx, ry - radius);
-        ctx.lineTo(lx, ly + radius);
-        ctx.quadraticCurveTo(lx, ly, lx + radius, ly);
-        ctx.closePath();
-        ctx.fill();
-
-        // Label text
-        ctx.fillStyle = "#ffffff";
-        ctx.textBaseline = "middle";
-        ctx.fillText(label, lx + padding, ly + th / 2 + padding);
-    }
-}
-
-function clearHighlight(canvas) {
-    if (!canvas) return;
-    var ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-}
-
-function updateActionInfo(label, success) {
-    if (!actionInfoLabel) return;
-    actionInfoLabel.textContent = label || "等待操作...";
-    actionInfoLabel.classList.remove("highlight-action", "highlight-success", "highlight-fail");
-    if (label) {
-        if (success === true) {
-            actionInfoLabel.classList.add("highlight-success");
-        } else if (success === false) {
-            actionInfoLabel.classList.add("highlight-fail");
-        } else {
-            actionInfoLabel.classList.add("highlight-action");
-        }
-    }
-}
-
-function resetScreenshotPanel() {
-    if (!screenshotPanel) return;
-    if (screenshotPlaceholder) screenshotPlaceholder.classList.remove("hidden");
-    if (screenshotImg) {
-        screenshotImg.style.display = "none";
-        screenshotImg.src = "";
-    }
-    if (screenshotOverlay) {
-        screenshotOverlay.style.display = "none";
-        clearHighlight(screenshotOverlay);
-    }
-    if (screenshotStepBadge) {
-        screenshotStepBadge.textContent = "等待中";
-        screenshotStepBadge.classList.remove("active");
-    }
-    updateActionInfo(null, null);
-    currentScreenshot = null;
-    currentTargetBbox = null;
-    currentActionLabel = null;
 }
 
 // ============================================================================
@@ -476,7 +275,7 @@ function buildTaskConfig(task, url) {
         model: settingModel.value || PROVIDER_DEFAULTS[settingProvider.value]?.model || "qwen3-vl-8b-instruct",
         api_key: getApiKey(),
         base_url: settingBaseUrl.value.trim() || null,
-        max_steps: parseInt(settingMaxSteps.value, 10) || 15,
+        max_steps: parseInt(settingMaxSteps.value, 10) || 30,
         headless: settingHeadless.checked,
     };
 }
@@ -487,43 +286,262 @@ function buildTaskConfig(task, url) {
 
 function handleMessage(msg) {
     switch (msg.type) {
+        case "step_phase":
+            handleStepPhase(msg);
+            break;
         case "step":
             hideTyping();
-            // Update screenshot panel with new screenshot and target highlight
-            if (msg.screenshot) {
-                updateScreenshotPanel(
-                    msg.screenshot,
-                    msg.target_bbox || null,
-                    msg.target_label || null,
-                    msg.step,
-                    msg.success
-                );
-            }
-            addStepMessage(msg);
+            // Fall through to finalize the bubble, then re-show typing
+            msg.phase = "complete";
+            handleStepPhase(msg);
             showTyping();
             break;
         case "done":
             hideTyping();
             setRunning(false);
             addResultMessage(msg.success, msg.answer, msg.total_steps, msg.error);
-            // Update screenshot panel for final state
-            updateActionInfo(
-                msg.success ? ("✅ " + (msg.answer || "任务完成")) : ("❌ " + (msg.error || "任务失败")),
-                msg.success
-            );
-            if (screenshotStepBadge) {
-                screenshotStepBadge.textContent = msg.success ? "已完成" : "失败";
-                screenshotStepBadge.classList.remove("active");
-            }
             break;
         case "error":
             hideTyping();
             setRunning(false);
             addResultMessage(false, null, 0, msg.message);
             toast(msg.message || "任务出错", "error");
-            updateActionInfo("❌ " + (msg.message || "出错"), false);
+            break;
+        case "captcha_required":
+            hideTyping();
+            addCaptchaMessage(msg);
             break;
     }
+}
+
+// Track phase timers per step
+const stepTimers = {};
+
+function handleStepPhase(msg) {
+    removeWelcome();
+    const stepId = "step-" + msg.step;
+    let bubble = document.getElementById(stepId);
+
+    // Phase: perceive → create bubble with screenshot
+    if (msg.phase === "perceive") {
+        stepTimers[msg.step] = { perceive: Date.now() };
+        if (!bubble) {
+            bubble = createStepBubble(msg.step, msg.screenshot, msg.elements);
+            chatMessages.appendChild(bubble);
+        }
+        scrollToBottom();
+        return;
+    }
+
+    // If bubble doesn't exist yet (phase arrived before perceive), create placeholder
+    if (!bubble) {
+        bubble = createStepBubble(msg.step, null, 0);
+        chatMessages.appendChild(bubble);
+    }
+
+    const phaseEl = bubble.querySelector(".step-phases");
+
+    // Phase: reasoning → show thinking animation
+    if (msg.phase === "reasoning") {
+        if (stepTimers[msg.step]) {
+            stepTimers[msg.step].reasoning = Date.now();
+            stepTimers[msg.step]._phaseStart = Date.now();  // for live timer display
+        }
+        updatePhaseContent(phaseEl, "reasoning", "🧠", "VLM 思考中...", true);
+    }
+
+    // Phase: acting → lock in reasoning duration, record acting start
+    if (msg.phase === "acting") {
+        if (stepTimers[msg.step]) {
+            const now = Date.now();
+            if (stepTimers[msg.step].reasoning) {
+                stepTimers[msg.step].reasoningDuration =
+                    ((now - stepTimers[msg.step].reasoning) / 1000).toFixed(1);
+            }
+            stepTimers[msg.step].acting = now;
+            stepTimers[msg.step]._phaseStart = now;
+        }
+        const label = msg.label || (msg.action ? msg.action.toUpperCase() : "");
+        let desc = label;
+        if (msg.element_id) desc += " · 元素 #" + msg.element_id;
+        if (msg.value) desc += " · \"" + escapeHtml(String(msg.value)) + "\"";
+        updatePhaseContent(phaseEl, "acting", "🖱️", desc, false);
+
+        // Replace screenshot with highlighted version (red box on target)
+        if (msg.highlighted_screenshot) {
+            const img = bubble.querySelector(".step-screenshot");
+            if (img) {
+                img.src = "data:image/png;base64," + msg.highlighted_screenshot;
+                // Add highlight indicator label
+                const existing = bubble.querySelector(".screenshot-label.before");
+                if (existing) existing.textContent = "操作前 🔴 目标";
+            }
+        }
+    }
+
+    // Phase: verifying → lock in acting duration, record verifying start
+    if (msg.phase === "verifying") {
+        if (stepTimers[msg.step]) {
+            const now = Date.now();
+            if (stepTimers[msg.step].acting) {
+                stepTimers[msg.step].actingDuration =
+                    ((now - stepTimers[msg.step].acting) / 1000).toFixed(1);
+            }
+            stepTimers[msg.step].verifying = now;
+            stepTimers[msg.step]._phaseStart = now;
+        }
+        updatePhaseContent(phaseEl, "verifying", "🔍", "验证中...", true);
+    }
+
+    // Final step → complete the bubble
+    if (msg.phase !== "perceive" && msg.phase !== "reasoning" &&
+        msg.phase !== "acting" && msg.phase !== "verifying") {
+        finalizeStepBubble(bubble, msg);
+    }
+
+    scrollToBottom();
+}
+
+function createStepBubble(step, screenshot, elements) {
+    const div = document.createElement("div");
+    div.className = "message agent";
+    div.id = "step-" + step;
+
+    let screenshotHtml = "";
+    if (screenshot) {
+        screenshotHtml = `<img class="step-screenshot" src="data:image/png;base64,${screenshot}" alt="Step ${step} 截图" onclick="openLightbox(this.src)" loading="lazy" />`;
+    }
+
+    div.innerHTML = `
+        <div class="bubble">
+            <div class="step-header">
+                <span class="step-number">📍 第 ${step} 步</span>
+                ${elements ? `<span class="step-elements">${elements} 个元素</span>` : ""}
+            </div>
+            ${screenshotHtml}
+            <div class="step-phases"></div>
+        </div>
+    `;
+    return div;
+}
+
+function updatePhaseContent(container, phaseClass, icon, text, showTimer) {
+    // Replace all phase content
+    let html = `<div class="step-phase ${phaseClass}">`;
+    html += `<span class="phase-icon">${icon}</span>`;
+    html += `<span class="phase-text">${escapeHtml(text)}</span>`;
+    if (showTimer) {
+        html += `<span class="phase-timer" data-phase="${phaseClass}"></span>`;
+    }
+    html += `</div>`;
+    container.innerHTML = html;
+
+    // Start live timer
+    if (showTimer) {
+        const timerEl = container.querySelector(".phase-timer");
+        if (timerEl) {
+            const start = Date.now();
+            const update = () => {
+                if (!timerEl.parentElement) return;  // Element removed
+                const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+                timerEl.textContent = elapsed + "s";
+                requestAnimationFrame(update);
+            };
+            update();
+        }
+    }
+}
+
+function finalizeStepBubble(bubble, msg) {
+    const timers = stepTimers[msg.step] || {};
+
+    // Lock in verifying duration
+    if (timers.verifying && !timers.verifyingDuration) {
+        timers.verifyingDuration = ((Date.now() - timers.verifying) / 1000).toFixed(1);
+    }
+
+    const vt = timers.reasoningDuration ? timers.reasoningDuration + "s" : null;
+    const at = timers.actingDuration ? timers.actingDuration + "s" : null;
+    const vft = timers.verifyingDuration ? timers.verifyingDuration + "s" : null;
+
+    // Step header with action tag
+    const header = bubble.querySelector(".step-header");
+    if (header && msg.action) {
+        const successClass = msg.success ? "success" : "fail";
+        header.innerHTML = `
+            <span class="step-number">📍 第 ${msg.step} 步</span>
+            <span class="step-action ${successClass}">${msg.action}</span>
+        `;
+    }
+
+    // Add detail
+    const bubbleEl = bubble.querySelector(".bubble");
+    const phasesEl = bubble.querySelector(".step-phases");
+    let detailHtml = "";
+    if (msg.description) {
+        detailHtml += `<div class="step-detail">${escapeHtml(msg.description)}</div>`;
+    }
+
+    // Post screenshot
+    if (msg.post_screenshot) {
+        detailHtml += `<div class="screenshot-compare">`;
+        detailHtml += `<div class="screenshot-side"><span class="screenshot-label before">操作前</span><img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="操作前" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
+        detailHtml += `<div class="screenshot-side"><span class="screenshot-label after">操作后</span><img class="step-screenshot" src="data:image/png;base64,${msg.post_screenshot}" alt="操作后" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
+        detailHtml += `</div>`;
+    }
+
+    // Verification result
+    if (msg.verification) {
+        const v = msg.verification;
+        const vClass = v.effect_achieved ? "verified" : (v.should_retry ? "failed" : "neutral");
+        detailHtml += `<div class="step-verification ${vClass}">`;
+        detailHtml += `<div class="verification-header ${vClass}">`;
+        detailHtml += `<span class="verification-icon">${v.effect_achieved ? "✅" : "❌"}</span>`;
+        detailHtml += `<span>${v.effect_achieved ? "操作成功" : "操作未达到预期效果"}</span>`;
+        detailHtml += `</div>`;
+        if (v.observation) detailHtml += `<div class="verification-observation">📝 ${escapeHtml(v.observation)}</div>`;
+        if (v.rollback_action || v.retry_action) {
+            detailHtml += `<div class="verification-recovery">`;
+            if (v.rollback_action) detailHtml += `<div class="recovery-action rollback"><span class="recovery-icon">↩️</span><span>回退: ${buildActionDesc(v.rollback_action)}</span></div>`;
+            if (v.retry_action) detailHtml += `<div class="recovery-action retry"><span class="recovery-icon">🔄</span><span>重试: ${buildActionDesc(v.retry_action)}</span></div>`;
+            detailHtml += `</div>`;
+        }
+        detailHtml += `</div>`;
+    }
+
+    // Timing
+    if (vt || at || vft) {
+        detailHtml += `<div class="step-timing">`;
+        if (vt) detailHtml += `🧠 VLM: ${vt}`;
+        if (at) detailHtml += `🖱️ 执行: ${at}`;
+        if (vft) detailHtml += `🔍 验证: ${vft}`;
+        detailHtml += `</div>`;
+    }
+
+    // VLM output
+    if (msg.vlm_output) {
+        detailHtml += `<details class="step-vlm-detail"><summary>📋 VLM 输出</summary><div class="step-vlm">${escapeHtml(msg.vlm_output)}</div></details>`;
+    }
+
+    detailHtml += `<div class="msg-time">${nowTime()}</div>`;
+
+    // Replace phases with final content
+    if (phasesEl) {
+        phasesEl.outerHTML = detailHtml;
+    } else if (bubbleEl) {
+        bubbleEl.insertAdjacentHTML("beforeend", detailHtml);
+    }
+
+    delete stepTimers[msg.step];
+}
+
+function buildActionDesc(obj) {
+    if (!obj) return "";
+    const parts = [];
+    if (obj.action) parts.push(obj.action.toUpperCase());
+    if (obj.element_id) parts.push("#" + obj.element_id);
+    if (obj.value) parts.push('"' + escapeHtml(String(obj.value)) + '"');
+    return parts.join(" ");
 }
 
 function removeWelcome() {
@@ -546,95 +564,6 @@ function addUserMessage(task, url) {
     scrollToBottom();
 }
 
-function addStepMessage(msg) {
-    removeWelcome();
-    const div = document.createElement("div");
-    div.className = "message agent";
-
-    const actionLabel = msg.action || "unknown";
-    const successClass = msg.success ? "success" : "fail";
-
-    let screenshotHtml = "";
-    if (msg.screenshot) {
-        // Before/after comparison layout
-        screenshotHtml = '<div class="screenshot-compare">';
-        screenshotHtml += `<div class="screenshot-side"><span class="screenshot-label before">操作前</span><img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="操作前截图" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
-        if (msg.post_screenshot) {
-            screenshotHtml += `<div class="screenshot-side"><span class="screenshot-label after">操作后</span><img class="step-screenshot" src="data:image/png;base64,${msg.post_screenshot}" alt="操作后截图" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
-        }
-        screenshotHtml += '</div>';
-    }
-
-    let actionDetail = "";
-    if (msg.action) {
-        const parts = [];
-        if (msg.element_id) parts.push(`元素 #${msg.element_id}`);
-        if (msg.value) parts.push(`"${escapeHtml(String(msg.value))}"`);
-        actionDetail = parts.join(" · ");
-    }
-
-    // Build verification display HTML
-    let verificationHtml = "";
-    if (msg.verification) {
-        const v = msg.verification;
-        let vClass, vHeaderText, vIcon;
-
-        if (v.effect_achieved) {
-            vClass = "verified";
-            vHeaderText = "操作成功";
-            vIcon = "✅";
-        } else {
-            vClass = v.should_retry ? "failed" : "neutral";
-            vHeaderText = v.should_retry ? "操作未达到预期效果" : "操作未生效";
-            vIcon = v.should_retry ? "❌" : "⚠️";
-        }
-
-        verificationHtml = `
-            <div class="step-verification ${vClass}">
-                <div class="verification-header ${vClass}">
-                    <span class="verification-icon">${vIcon}</span>
-                    <span>${vHeaderText}</span>
-                </div>
-                ${v.observation ? `<div class="verification-observation">📝 ${escapeHtml(v.observation)}</div>` : ""}
-                ${(v.rollback_action || v.retry_action) ? '<div class="verification-recovery">' : ""}
-                    ${v.rollback_action ? buildRecoveryActionHtml("↩️ 回退", v.rollback_action, "rollback") : ""}
-                    ${v.retry_action ? buildRecoveryActionHtml("🔄 重试", v.retry_action, "retry") : ""}
-                ${(v.rollback_action || v.retry_action) ? '</div>' : ""}
-            </div>`;
-    }
-
-    div.innerHTML = `
-        <div class="bubble">
-            <div class="step-header">
-                <span class="step-number">📍 第 ${msg.step} 步</span>
-                <span class="step-action ${successClass}">${actionLabel}</span>
-            </div>
-            ${actionDetail ? `<div class="step-detail">${actionDetail}</div>` : ""}
-            ${msg.description ? `<div class="step-detail">${escapeHtml(msg.description)}</div>` : ""}
-            ${screenshotHtml}
-            ${verificationHtml}
-            ${msg.vlm_output ? `<details class="step-vlm-detail"><summary>📋 VLM 输出</summary><div class="step-vlm">${escapeHtml(msg.vlm_output)}</div></details>` : ""}
-            <div class="msg-time">${nowTime()}</div>
-        </div>
-    `;
-
-    chatMessages.appendChild(div);
-    scrollToBottom();
-}
-
-function buildRecoveryActionHtml(label, actionObj, cssClass) {
-    if (!actionObj) return "";
-    const parts = [];
-    if (actionObj.action) parts.push(actionObj.action.toUpperCase());
-    if (actionObj.element_id) parts.push("#" + actionObj.element_id);
-    if (actionObj.value) parts.push('"' + escapeHtml(String(actionObj.value)) + '"');
-    const desc = parts.join(" ");
-    return `<div class="recovery-action ${cssClass}">
-        <span class="recovery-icon">${label.split(" ")[0]}</span>
-        <span>${label.split(" ")[1] || ""}: ${desc}</span>
-    </div>`;
-}
-
 function addResultMessage(success, answer, totalSteps, error) {
     const div = document.createElement("div");
     div.className = `message result ${success ? "success" : "fail"}`;
@@ -654,6 +583,31 @@ function addResultMessage(success, answer, totalSteps, error) {
 
     chatMessages.appendChild(div);
     scrollToBottom();
+}
+
+function addCaptchaMessage(msg) {
+    const div = document.createElement("div");
+    div.className = "message captcha";
+    div.innerHTML = `
+        <div class="bubble">
+            <div class="captcha-icon">🔐</div>
+            <div class="captcha-title">检测到验证码</div>
+            <div class="captcha-text">${escapeHtml(msg.message || "请在浏览器窗口手动完成验证码操作")}</div>
+            ${msg.screenshot ? `<img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="验证码页面" onclick="openLightbox(this.src)" loading="lazy" />` : ""}
+            <button class="btn-continue" onclick="continueTask(this)">✅ 已完成验证，继续</button>
+            <div class="msg-time">${nowTime()}</div>
+        </div>
+    `;
+    chatMessages.appendChild(div);
+    scrollToBottom();
+}
+
+function continueTask(btn) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "continue" }));
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ 等待中..."; }
+    // Disable all other continue buttons too (previous CAPTCHA bubbles)
+    document.querySelectorAll(".btn-continue").forEach(b => { b.disabled = true; });
 }
 
 // ============================================================================
@@ -679,11 +633,19 @@ function handleSend() {
     }
 
     currentTask = { task, url };
+
+    // Clear old agent messages + reset state for new task
+    const oldMessages = chatMessages.querySelectorAll(
+        ".message.agent, .message.result, .message.captcha"
+    );
+    oldMessages.forEach(m => m.remove());
+    for (const key of Object.keys(stepTimers)) {
+        delete stepTimers[key];
+    }
+
     addUserMessage(task, url);
     saveSettings();
     setRunning(true);
-    resetScreenshotPanel();
-    if (screenshotStepBadge) screenshotStepBadge.textContent = "运行中...";
     startTask(task, url);
 }
 
@@ -728,6 +690,7 @@ btnNewTask.addEventListener("click", () => {
     taskInput.value = "";
     urlInput.value = "https://example.com";
     taskInput.focus();
+    for (const key of Object.keys(stepTimers)) { delete stepTimers[key]; }
     chatMessages.innerHTML = `
         <div class="welcome-message" id="welcome-message">
             <div class="welcome-icon">🤖</div>
@@ -735,9 +698,9 @@ btnNewTask.addEventListener("click", () => {
             <p>在下方输入任务描述和目标网址，Agent 将使用视觉语言模型自动操控浏览器完成任务。</p>
             <div class="welcome-examples">
                 <h4>示例任务</h4>
-                <button class="example-chip" data-task="打开 Hacker News 并告诉我今天的头条新闻是什么" data-url="https://news.ycombinator.com">📰 Hacker News 头条</button>
-                <button class="example-chip" data-task="搜索从北京到上海的航班" data-url="https://www.google.com/travel/flights">✈️ 搜索航班</button>
-                <button class="example-chip" data-task="这个页面的标题是什么？" data-url="https://example.com">📄 读取页面标题</button>
+                <button class="example-chip" data-task="中山大学广州校区南校园在哪里" data-url="https://www.bing.com">🏫 中山大学南校园</button>
+                <button class="example-chip" data-task="打开buff，查询精英之作的价格" data-url="https://www.bing.com">🎮 Buff 精英之作</button>
+                <button class="example-chip" data-task="登录QQ邮箱，给739862481@qq.com发送一封端午节祝福邮件，标题'端午安康'，正文简短的节日祝福即可" data-url="https://mail.qq.com">📧 QQ邮箱发端午祝福</button>
             </div>
         </div>
         <div class="typing-indicator" id="typing-indicator">
@@ -750,20 +713,12 @@ btnNewTask.addEventListener("click", () => {
     `;
     // Re-bind example chips
     $$(".example-chip").forEach(bindExampleChip);
-    // Reset screenshot panel
-    resetScreenshotPanel();
     toast("新任务已就绪", "info");
 });
 
 btnToggleSidebar.addEventListener("click", () => {
     sidebar.classList.toggle("collapsed");
     saveSidebarState();
-});
-
-btnToggleScreenshot.addEventListener("click", () => {
-    screenshotPanel.classList.toggle("collapsed");
-    btnToggleScreenshot.classList.toggle("active", screenshotPanel.classList.contains("collapsed"));
-    saveScreenshotPanelState();
 });
 
 lightboxClose.addEventListener("click", closeLightbox);
@@ -787,23 +742,7 @@ document.addEventListener("keydown", (e) => {
         saveSidebarState();
     }
 
-    // Ctrl+M to toggle screenshot panel
-    if (e.key === "m" && e.ctrlKey) {
-        e.preventDefault();
-        screenshotPanel.classList.toggle("collapsed");
-        btnToggleScreenshot.classList.toggle("active", screenshotPanel.classList.contains("collapsed"));
-        saveScreenshotPanelState();
-    }
 });
-
-// Click screenshot image to open lightbox
-if (screenshotImg) {
-    screenshotImg.addEventListener("click", () => {
-        if (screenshotImg.src && screenshotImg.style.display !== "none") {
-            openLightbox(screenshotImg.src);
-        }
-    });
-}
 
 // Example chips binding
 function bindExampleChip(chip) {
@@ -843,5 +782,4 @@ function escapeHtml(text) {
 
 loadSettings();
 loadSidebarState();
-loadScreenshotPanelState();
 connectWebSocket();

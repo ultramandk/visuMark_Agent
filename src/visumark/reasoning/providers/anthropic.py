@@ -174,16 +174,18 @@ class AnthropicReasoner(BaseReasoner):
         import json
 
         parser = ActionParser()
+        plan = ""
         thought = ""
         action = None
         try:
             json_match = re.search(r"\{[\s\S]*\}", raw_text)
             if json_match:
                 obj = json.loads(json_match.group(0))
+                plan = obj.get("plan", "")
                 thought = obj.get("thought", "")
             action = parser.parse(raw_text)
         except Exception as e:
             logger.warning(f"Failed to parse Claude response: {e}")
             thought = raw_text[:200]
 
-        return ReasonerOutput(raw_text=raw_text, thought=thought, action=action)
+        return ReasonerOutput(raw_text=raw_text, thought=thought, plan=plan, action=action)

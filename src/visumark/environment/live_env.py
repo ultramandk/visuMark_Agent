@@ -17,7 +17,7 @@ class LiveEnvironment(BaseEnvironment):
 
     def __init__(
         self,
-        headless: bool = True,
+        headless: bool = False,
         viewport: tuple[int, int] = (1280, 720),
         timeout: int = 30_000,
     ):

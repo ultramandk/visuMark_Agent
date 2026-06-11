@@ -191,27 +191,21 @@ class OpenAIReasoner(BaseReasoner):
     # ------------------------------------------------------------------
 
     def _parse_response(self, raw_text: str) -> ReasonerOutput:
-        """Parse the VLM response, extracting thought and action.
-
-        Handles multiple response formats:
-            { "thought": "...", "action": "click", "mark": "3" }
-            { "action": "click", "element_id": "3" }
-            CLICK [3]
-        """
+        """Parse the VLM response, extracting plan, thought, and action."""
         from visumark.action.parser import ActionParser
 
         parser = ActionParser()
+        plan = ""
         thought = ""
         action = None
 
         try:
-            # Try JSON first
             import re
             json_match = re.search(r"\{[\s\S]*\}", raw_text)
             if json_match:
                 obj = __import__("json").loads(json_match.group(0))
+                plan = obj.get("plan", "")
                 thought = obj.get("thought", "")
-                # Fall through to parser for action extraction
 
             action = parser.parse(raw_text)
         except Exception as e:
@@ -221,5 +215,6 @@ class OpenAIReasoner(BaseReasoner):
         return ReasonerOutput(
             raw_text=raw_text,
             thought=thought,
+            plan=plan,
             action=action,
         )
