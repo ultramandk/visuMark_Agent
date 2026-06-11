@@ -165,13 +165,19 @@ class ActionParser:
                 if not lower.startswith(keyword):
                     continue
 
-                # Extract element ID: [N]
-                elem_match = re.search(r"\[(\d+)\]", line)
+                # Extract element ID: [N] or #N
+                elem_match = re.search(r"\[(\d+)\]", line) or re.search(r"#(\d+)", line)
                 element_id = str(elem_match.group(1)) if elem_match else None
 
                 # Extract quoted value: "text"
                 value_match = re.search(r'"([^"]*)"', line)
                 value = value_match.group(1) if value_match else None
+
+                # For TYPE: extract unquoted value after #N pattern
+                if atype == ActionType.TYPE and not value:
+                    type_val_match = re.search(r"#\d+\s+(.+?)$", line)
+                    if type_val_match:
+                        value = type_val_match.group(1).strip()
 
                 # Handle scroll direction
                 if atype == ActionType.SCROLL:

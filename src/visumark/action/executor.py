@@ -57,6 +57,30 @@ class ActionExecutor:
             return False
 
 
+def build_action_description(action: Action) -> str:
+    """Build a human-readable action description without bridge dependency.
+
+    Used for verification prompts where DOMBridge may not be available.
+    """
+    atype = action.action_type
+    eid = f" #{action.element_id}" if action.element_id else ""
+    val = f" '{action.value}'" if action.value else ""
+
+    labels = {
+        ActionType.CLICK: f"CLICK{eid}",
+        ActionType.TYPE: f"TYPE{val} into{eid}",
+        ActionType.SELECT: f"SELECT{val} from{eid}",
+        ActionType.SCROLL: f"SCROLL {action.value or 'down'}",
+        ActionType.HOVER: f"HOVER{eid}",
+        ActionType.PRESS: f"PRESS {action.value or 'Enter'}",
+        ActionType.GOTO: f"GOTO {action.value or ''}",
+        ActionType.WAIT: f"WAIT {action.value or '1000'}ms",
+        ActionType.ANSWER: f"ANSWER: {action.value or ''}",
+        ActionType.FAIL: f"FAIL: {action.value or ''}",
+    }
+    return labels.get(atype, f"{atype.value.upper()}{eid}{val}")
+
+
 def build_target_label(action: Action, bridge: DOMBridge | None = None) -> str:
     """Build a human-readable label for display in the UI.
 

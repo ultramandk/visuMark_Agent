@@ -17,6 +17,7 @@ from playwright.async_api import Page
 from visumark.core.types import PageElement
 from visumark.environment.dom_utils import (
     INTERACTIVE_SELECTOR,
+    INTERACTIVE_TAG_SET,
     clean_text,
 )
 
@@ -98,12 +99,21 @@ def _build_extraction_js(
     Returns a JSON-serializable list of element dicts.
     """
     ats_json = json.dumps(ats_map)
+    escaped_selector = INTERACTIVE_SELECTOR.replace('"', '\\"')
+    interactive_tags_json = json.dumps(sorted(INTERACTIVE_TAG_SET))
+    interactive_roles_json = json.dumps([
+        "button", "link", "checkbox", "radio", "radiogroup", "combobox",
+        "listbox", "menu", "menuitem", "tab", "switch", "slider",
+        "option", "textbox", "searchbox",
+    ])
 
     return f"""(() => {{
     const MAX = {max_elements};
     const MIN_SIZE = {min_size};
+    const INTERACTIVE_TAGS = new Set({interactive_tags_json});
+    const INTERACTIVE_ROLES = new Set({interactive_roles_json});
     const ATS_MAP = {ats_json};
-    const SELECTOR = "{INTERACTIVE_SELECTOR.replace('"', '\\"')}";
+    const SELECTOR = "{escaped_selector}";
     const VW = {viewport["width"]};
     const VH = {viewport["height"]};
 
@@ -152,7 +162,7 @@ def _build_extraction_js(
     const all = document.querySelectorAll(SELECTOR);
     const candidates = [];
 
-    for (const el of all) {{
+    for (let el of all) {{
         if (candidates.length >= MAX) break;
 
         // Visibility check
@@ -160,15 +170,59 @@ def _build_extraction_js(
         if (style.display === 'none' || style.visibility === 'hidden') continue;
         if (style.opacity === '0') continue;
 
-        const rect = el.getBoundingClientRect();
-        const area = rect.width * rect.height;
-        if (area < MIN_SIZE) continue;
+        let tag = el.tagName.toLowerCase();
+        let rect = el.getBoundingClientRect();
+        let area = rect.width * rect.height;
+
+        // ── Size check with relaxed thresholds ──
+        // Interactive HTML tags (button, a, input, etc.) and aria-label
+        // elements are often small icon buttons. Use a lower threshold.
+        const hasAriaLabel = !!el.getAttribute('aria-label');
+        const isKnownInteractive = INTERACTIVE_TAGS.has(tag)
+            || el.getAttribute('role') && INTERACTIVE_ROLES.has(el.getAttribute('role'))
+            || hasAriaLabel;
+        const sizeThreshold = isKnownInteractive ? 1 : MIN_SIZE;
+
+        // ── Parent bbox inheritance for tiny children ──
+        // An SVG icon inside a button may have a tiny rect but its
+        // clickable area is the parent's bbox. Walk up to find it.
+        if (area < sizeThreshold && (tag === 'svg' || tag === 'path' || tag === 'circle' || tag === 'rect' || tag === 'g' || tag === 'i' || tag === 'span')) {{
+            let parent = el.parentElement;
+            const MAX_DEPTH = 5;
+            let depth = 0;
+            while (parent && depth < MAX_DEPTH) {{
+                const parentTag = parent.tagName.toLowerCase();
+                const parentRole = (parent.getAttribute('role') || '').toLowerCase();
+                const parentAria = !!parent.getAttribute('aria-label');
+                const isParentInteractive = INTERACTIVE_TAGS.has(parentTag)
+                    || (parentRole && (INTERACTIVE_ROLES.has(parentRole) || parentRole === 'button'))
+                    || parentAria
+                    || parent.hasAttribute('onclick')
+                    || parent.hasAttribute('tabindex');
+                if (isParentInteractive) {{
+                    const pr = parent.getBoundingClientRect();
+                    const pa = pr.width * pr.height;
+                    if (pa >= sizeThreshold) {{
+                        // Use parent as the labeled element instead
+                        el = parent;
+                        tag = parentTag;
+                        rect = pr;
+                        area = pa;
+                        break;
+                    }}
+                }}
+                parent = parent.parentElement;
+                depth++;
+            }}
+            // If no suitable parent found, skip this tiny element
+            if (area < sizeThreshold) continue;
+        }} else if (area < sizeThreshold) {{
+            continue;
+        }}
 
         // Off-screen check
         if (rect.bottom < -500 || rect.top > VH + 500) continue;
         if (rect.right < -500 || rect.left > VW + 500) continue;
-
-        const tag = el.tagName.toLowerCase();
 
         // Attributes
         const attrs = {{}};

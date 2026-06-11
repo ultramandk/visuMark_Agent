@@ -7,7 +7,7 @@ a predicted Action.
 
 from abc import ABC, abstractmethod
 
-from visumark.core.types import Perception, ReasonerOutput, StepRecord
+from visumark.core.types import Action, Perception, ReasonerOutput, StepRecord, VerificationResult
 
 
 class BaseReasoner(ABC):
@@ -36,6 +36,35 @@ class BaseReasoner(ABC):
         Returns:
             ReasonerOutput with the model's raw response, extracted thought,
             and parsed action.
+        """
+        ...
+
+    @abstractmethod
+    async def verify(
+        self,
+        action: Action,
+        thought: str,
+        pre_screenshot: bytes,
+        post_screenshot: bytes,
+        task: str,
+        page_url: str = "",
+    ) -> VerificationResult:
+        """Verify whether an executed action achieved its intended effect.
+
+        Sends the pre-action (SoM-annotated) and post-action (raw) screenshots
+        to the VLM for a focused before/after comparison.
+
+        Args:
+            action: The action that was just executed.
+            thought: The VLM's reasoning when choosing this action.
+            pre_screenshot: SoM-annotated screenshot from before the action.
+            post_screenshot: Raw screenshot taken after the action.
+            task: The overall task description.
+            page_url: The page URL before the action (for rollback suggestion).
+
+        Returns:
+            VerificationResult indicating whether the effect was achieved
+            and optionally suggesting rollback or alternative action.
         """
         ...
 

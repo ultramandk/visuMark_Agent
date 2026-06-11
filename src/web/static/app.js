@@ -556,7 +556,13 @@ function addStepMessage(msg) {
 
     let screenshotHtml = "";
     if (msg.screenshot) {
-        screenshotHtml = `<img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="Step ${msg.step} screenshot" onclick="openLightbox(this.src)" loading="lazy" />`;
+        // Before/after comparison layout
+        screenshotHtml = '<div class="screenshot-compare">';
+        screenshotHtml += `<div class="screenshot-side"><span class="screenshot-label before">操作前</span><img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="操作前截图" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
+        if (msg.post_screenshot) {
+            screenshotHtml += `<div class="screenshot-side"><span class="screenshot-label after">操作后</span><img class="step-screenshot" src="data:image/png;base64,${msg.post_screenshot}" alt="操作后截图" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
+        }
+        screenshotHtml += '</div>';
     }
 
     let actionDetail = "";
@@ -565,6 +571,36 @@ function addStepMessage(msg) {
         if (msg.element_id) parts.push(`元素 #${msg.element_id}`);
         if (msg.value) parts.push(`"${escapeHtml(String(msg.value))}"`);
         actionDetail = parts.join(" · ");
+    }
+
+    // Build verification display HTML
+    let verificationHtml = "";
+    if (msg.verification) {
+        const v = msg.verification;
+        let vClass, vHeaderText, vIcon;
+
+        if (v.effect_achieved) {
+            vClass = "verified";
+            vHeaderText = "操作成功";
+            vIcon = "✅";
+        } else {
+            vClass = v.should_retry ? "failed" : "neutral";
+            vHeaderText = v.should_retry ? "操作未达到预期效果" : "操作未生效";
+            vIcon = v.should_retry ? "❌" : "⚠️";
+        }
+
+        verificationHtml = `
+            <div class="step-verification ${vClass}">
+                <div class="verification-header ${vClass}">
+                    <span class="verification-icon">${vIcon}</span>
+                    <span>${vHeaderText}</span>
+                </div>
+                ${v.observation ? `<div class="verification-observation">📝 ${escapeHtml(v.observation)}</div>` : ""}
+                ${(v.rollback_action || v.retry_action) ? '<div class="verification-recovery">' : ""}
+                    ${v.rollback_action ? buildRecoveryActionHtml("↩️ 回退", v.rollback_action, "rollback") : ""}
+                    ${v.retry_action ? buildRecoveryActionHtml("🔄 重试", v.retry_action, "retry") : ""}
+                ${(v.rollback_action || v.retry_action) ? '</div>' : ""}
+            </div>`;
     }
 
     div.innerHTML = `
@@ -576,6 +612,7 @@ function addStepMessage(msg) {
             ${actionDetail ? `<div class="step-detail">${actionDetail}</div>` : ""}
             ${msg.description ? `<div class="step-detail">${escapeHtml(msg.description)}</div>` : ""}
             ${screenshotHtml}
+            ${verificationHtml}
             ${msg.vlm_output ? `<details class="step-vlm-detail"><summary>📋 VLM 输出</summary><div class="step-vlm">${escapeHtml(msg.vlm_output)}</div></details>` : ""}
             <div class="msg-time">${nowTime()}</div>
         </div>
@@ -583,6 +620,19 @@ function addStepMessage(msg) {
 
     chatMessages.appendChild(div);
     scrollToBottom();
+}
+
+function buildRecoveryActionHtml(label, actionObj, cssClass) {
+    if (!actionObj) return "";
+    const parts = [];
+    if (actionObj.action) parts.push(actionObj.action.toUpperCase());
+    if (actionObj.element_id) parts.push("#" + actionObj.element_id);
+    if (actionObj.value) parts.push('"' + escapeHtml(String(actionObj.value)) + '"');
+    const desc = parts.join(" ");
+    return `<div class="recovery-action ${cssClass}">
+        <span class="recovery-icon">${label.split(" ")[0]}</span>
+        <span>${label.split(" ")[1] || ""}: ${desc}</span>
+    </div>`;
 }
 
 function addResultMessage(success, answer, totalSteps, error) {

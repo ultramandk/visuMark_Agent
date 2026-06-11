@@ -352,7 +352,28 @@ class LiveEnvironment(BaseEnvironment):
     async def _resolve_element_target(
         self, element_id: str, bridge: DOMBridge | None
     ) -> tuple[float, float]:
-        """Resolve element center coordinates from bridge, or raise ValueError."""
+        """Resolve element center coordinates — live DOM query preferred.
+
+        Bridge bbox can be stale after page changes, so we query the
+        element's current position via data-som-id first.
+        """
+        # Primary: live DOM position (survives page changes)
+        try:
+            result = await self._page.evaluate(f"""
+                (() => {{
+                    const el = document.querySelector('[data-som-id="{element_id}"]');
+                    if (!el) return null;
+                    const r = el.getBoundingClientRect();
+                    if (r.width === 0 && r.height === 0) return null;
+                    return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }};
+                }})()
+            """)
+            if result and result["x"] is not None:
+                return result["x"], result["y"]
+        except Exception:
+            pass
+
+        # Fallback: bridge bbox (may be stale)
         if bridge is None:
             raise ValueError(f"No bridge available for coordinate fallback")
         bbox = bridge.get_bbox(element_id)
@@ -367,8 +388,10 @@ class LiveEnvironment(BaseEnvironment):
     ) -> bool:
         """Try to interact with an element via JavaScript.
 
-        Dispatches proper MouseEvents with real element-center coordinates.
-        Used as a FALLBACK when Playwright's native click fails.
+        Layered approach:
+        1. Dispatch full MouseEvent sequence (triggers JS listeners)
+        2. Call el.click() for default navigation behavior
+        3. For div/span containers: find inner <a> and click it
         """
         if action == "click":
             js_action = """
@@ -381,6 +404,11 @@ class LiveEnvironment(BaseEnvironment):
                 el.dispatchEvent(new MouseEvent('mouseup', opts));
                 el.dispatchEvent(new MouseEvent('click', opts));
                 el.focus();
+                // el.click() triggers default behavior (link navigation, form submit)
+                if (typeof el.click === 'function') el.click();
+                // For div/span containers: try clicking inner <a>
+                const inner = el.querySelector('a');
+                if (inner) { inner.scrollIntoView({block: 'center', inline: 'center', behavior: 'auto'}); inner.click(); }
             """
         elif action == "focus":
             js_action = """
@@ -416,16 +444,18 @@ class LiveEnvironment(BaseEnvironment):
     async def _click_element(
         self, action: Action, bridge: DOMBridge | None
     ) -> None:
-        """Click an element using 3-layer fallback.
+        """Click an element using 4-layer fallback.
 
-        Priority: Playwright native → JS MouseEvent → coordinates.
-        Playwright's native click produces trusted events (isTrusted=true)
-        that websites cannot distinguish from real user clicks.
+        Priority:
+        1. Playwright native (trusted isTrusted=true events)
+        2. JS MouseEvent + el.click() via data-som-id
+        3. elementFromPoint at expected coordinates (survives DOM replacement)
+        4. Coordinate scroll + center-click (last resort)
         """
         eid = action.element_id
         selector = f"[data-som-id='{eid}']"
 
-        # 1) Playwright native click (force: bypass actionability checks)
+        # 1) Playwright native click
         try:
             await self._page.click(selector, timeout=3000, force=True)
             logger.debug(f"Click OK on #{eid} (Playwright)")
@@ -433,12 +463,24 @@ class LiveEnvironment(BaseEnvironment):
         except Exception as e1:
             logger.debug(f"Playwright click failed on #{eid}: {e1}")
 
-        # 2) JS MouseEvent with proper coordinates
+        # 2) JS MouseEvent + el.click() + inner <a> via data-som-id
         if await self._try_js_interact(eid, "click"):
             logger.debug(f"Click OK on #{eid} (JS MouseEvent)")
             return
 
-        # 3) Coordinate fallback
+        # 3) elementFromPoint: find the real element at the expected position.
+        #    On dynamic pages, data-som-id may be stale (DOM replaced), but
+        #    the visual position from the bridge is still approximately correct.
+        try:
+            cx, cy = await self._resolve_element_target(eid, bridge)
+            hit_ok = await self._click_at_point(cx, cy)
+            if hit_ok:
+                logger.debug(f"Click OK on #{eid} (elementFromPoint)")
+                return
+        except ValueError:
+            pass
+
+        # 4) Coordinate fallback: scroll center to point, click screen center
         try:
             cx, cy = await self._resolve_element_target(eid, bridge)
             await self._page.evaluate(f"""
@@ -456,6 +498,47 @@ class LiveEnvironment(BaseEnvironment):
         logger.warning(
             f"FAILED to click #{eid}: not found by any method"
         )
+
+    async def _click_at_point(self, cx: float, cy: float) -> bool:
+        """Click whatever interactive element is at (cx, cy) using JS.
+
+        Walks up from elementFromPoint to find a clickable ancestor
+        (a, button, [role=button], [onclick]) and clicks it.
+        Survives stale data-som-id because it uses live DOM position.
+        """
+        try:
+            result = await self._page.evaluate(f"""
+                (() => {{
+                    const el = document.elementFromPoint({cx}, {cy});
+                    if (!el || el === document.body || el === document.documentElement) return false;
+
+                    // Walk up to find the nearest clickable ancestor
+                    let current = el;
+                    const MAX_DEPTH = 6;
+                    for (let i = 0; i < MAX_DEPTH; i++) {{
+                        const tag = current.tagName.toLowerCase();
+                        const role = (current.getAttribute('role') || '').toLowerCase();
+                        const hasClick = current.hasAttribute('onclick') || current.hasAttribute('tabindex');
+                        if (tag === 'a' || tag === 'button' || tag === 'input' ||
+                            role === 'button' || role === 'link' || hasClick) {{
+                            break;
+                        }}
+                        if (!current.parentElement) break;
+                        current = current.parentElement;
+                    }}
+
+                    current.scrollIntoView({{block: 'center', inline: 'center', behavior: 'auto'}});
+                    current.focus();
+                    current.dispatchEvent(new MouseEvent('mousedown', {{bubbles: true, cancelable: true, clientX: {cx}, clientY: {cy}}}));
+                    current.dispatchEvent(new MouseEvent('mouseup', {{bubbles: true, cancelable: true, clientX: {cx}, clientY: {cy}}}));
+                    current.dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true, clientX: {cx}, clientY: {cy}}}));
+                    if (typeof current.click === 'function') current.click();
+                    return current.tagName;
+                }})()
+            """)
+            return bool(result)
+        except Exception:
+            return False
 
     async def _type_in_element(
         self, action: Action, bridge: DOMBridge | None

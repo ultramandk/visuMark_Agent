@@ -8,6 +8,7 @@ from visumark.core.types import (
     ReasonerOutput,
     StepRecord,
     TaskRecord,
+    VerificationResult,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "ReasonerOutput",
     "StepRecord",
     "TaskRecord",
+    "VerificationResult",
 ]

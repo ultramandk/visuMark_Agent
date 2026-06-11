@@ -11,7 +11,7 @@ from typing import Any
 from loguru import logger
 from openai import AsyncOpenAI
 
-from visumark.core.types import Perception, ReasonerOutput, StepRecord
+from visumark.core.types import Action, Perception, ReasonerOutput, StepRecord, VerificationResult
 from visumark.reasoning.base import BaseReasoner
 
 
@@ -100,6 +100,54 @@ class OpenAIReasoner(BaseReasoner):
 
         logger.debug(f"Reasoner output: {output.action.to_dict() if output.action else 'None'}")
         return output
+
+    # ------------------------------------------------------------------
+    # Action verification — did the action produce the expected effect?
+    # ------------------------------------------------------------------
+
+    async def verify(
+        self,
+        action: Action,
+        thought: str,
+        pre_screenshot: bytes,
+        post_screenshot: bytes,
+        task: str,
+        page_url: str = "",
+    ) -> VerificationResult:
+        """Compare before/after screenshots to verify action effect."""
+        from visumark.action.executor import build_action_description
+        from visumark.reasoning.prompts.som_prompts import (
+            VERIFICATION_SYSTEM_PROMPT,
+            build_verification_user_prompt,
+            parse_verification_response,
+        )
+
+        action_desc = build_action_description(action)
+        user_msg = build_verification_user_prompt(action_desc, thought, task, page_url)
+
+        b64_pre = base64.b64encode(pre_screenshot).decode("utf-8")
+        b64_post = base64.b64encode(post_screenshot).decode("utf-8")
+
+        content: list[dict] = [
+            {"type": "text", "text": user_msg},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_pre}", "detail": "low"}},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_post}", "detail": "low"}},
+        ]
+
+        messages = [
+            {"role": "system", "content": VERIFICATION_SYSTEM_PROMPT},
+            {"role": "user", "content": content},
+        ]
+
+        try:
+            raw_text = await self._call_api(messages)
+            return parse_verification_response(raw_text)
+        except Exception as exc:
+            logger.warning(f"Verification call failed: {exc}")
+            return VerificationResult(
+                effect_achieved=True,  # Assume success if we can't verify
+                observation=f"Verification error: {exc}",
+            )
 
     # ------------------------------------------------------------------
     # API calling

@@ -209,6 +209,10 @@ async def ws_agent(ws: WebSocket):
             if record.perception.screenshot:
                 b64_screenshot = base64.b64encode(record.perception.screenshot).decode("utf-8")
 
+            b64_post_screenshot = None
+            if record.post_screenshot:
+                b64_post_screenshot = base64.b64encode(record.post_screenshot).decode("utf-8")
+
             # Target bbox for frontend highlight overlay
             target_bbox = None
             if record.action and record.action.element_id:
@@ -216,6 +220,19 @@ async def ws_agent(ws: WebSocket):
                     if elem.id == record.action.element_id:
                         target_bbox = list(elem.bbox)
                         break
+
+            # Verification result (if available)
+            verify_data = None
+            if record.verification is not None:
+                verify_data = {
+                    "effect_achieved": record.verification.effect_achieved,
+                    "observation": record.verification.observation,
+                    "should_retry": record.verification.should_retry,
+                }
+                if record.verification.rollback_action is not None:
+                    verify_data["rollback_action"] = record.verification.rollback_action.to_dict()
+                if record.verification.retry_action is not None:
+                    verify_data["retry_action"] = record.verification.retry_action.to_dict()
 
             await ws.send_json({
                 "type": "step",
@@ -226,9 +243,11 @@ async def ws_agent(ws: WebSocket):
                 "description": target_label,
                 "vlm_output": record.reasoner_output.raw_text[:2000],
                 "screenshot": b64_screenshot,
+                "post_screenshot": b64_post_screenshot,
                 "target_bbox": target_bbox,
                 "target_label": target_label,
                 "success": record.success,
+                "verification": verify_data,
             })
 
         async def on_done(self, record) -> None:

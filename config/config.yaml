@@ -6,6 +6,8 @@ agent:
   max_steps: 15
   retry_on_error: true
   max_retries: 3
+  verify_actions: true          # Post-action verification: compare before/after screenshots
+  max_verify_retries: 1         # Max retries when verification fails and suggests alternative
 
 # ---------------------------------------------------------------------------
 # Perception — how the agent "sees" the page

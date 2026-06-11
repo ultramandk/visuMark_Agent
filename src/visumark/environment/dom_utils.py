@@ -117,8 +117,14 @@ INTERACTIVE_SELECTOR = (
     "[role='menu'], [role='menuitem'], [role='tab'], [role='switch'], "
     "[role='slider'], [role='option'], [role='textbox'], [role='searchbox'], "
     "[onclick], [tabindex], "
-    "[data-backend-node-id]"   # Mind2Web marker
+    "[aria-label], "            # Icon buttons, search buttons, etc.
+    "[data-backend-node-id]"    # Mind2Web marker
 )
+
+# Tags that are unambiguously interactive — lower size threshold applies
+INTERACTIVE_TAG_SET = frozenset({
+    "button", "a", "input", "select", "textarea", "summary", "details",
+})
 
 # Extended: also include structural elements that may be interactive
 EXTENDED_SELECTOR = INTERACTIVE_SELECTOR + ", " + (
