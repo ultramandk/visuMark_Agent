@@ -224,36 +224,75 @@ class LiveEnvironment(BaseEnvironment):
         except Exception:
             pass
 
-        # Phase 3: Poll for actual rendered content
+        # Phase 3: Poll for actual rendered content (main doc + iframes)
         for i in range(max_polls):
             try:
                 result = await self._page.evaluate("""() => {
-                    const body = document.body;
-                    if (!body) return {text: 0, elems: 0, spinning: false};
-                    const visibleText = (body.innerText || '').trim();
-                    const interactive = body.querySelectorAll(
-                        'button, a, input, select, textarea, ' +
-                        '[role="button"], [role="link"], [role="checkbox"], ' +
-                        '[role="combobox"], [role="listbox"], [role="menuitem"], ' +
-                        '[role="tab"], [role="switch"], [onclick], [tabindex]'
-                    );
-                    const spinners = body.querySelectorAll(
-                        '[role="progressbar"], [aria-busy="true"], ' +
-                        '.loading, .spinner, .skeleton, ' +
-                        '[class*="loading"], [class*="spinner"], [class*="skeleton"]'
-                    );
+                    function countInDoc(doc) {
+                        const body = doc.body;
+                        if (!body) return {text: 0, elems: 0, spinning: false};
+                        const visibleText = (body.innerText || '').trim();
+                        const interactive = body.querySelectorAll(
+                            'button, a, input, select, textarea, ' +
+                            '[role="button"], [role="link"], [role="checkbox"], ' +
+                            '[role="combobox"], [role="listbox"], [role="menuitem"], ' +
+                            '[role="tab"], [role="switch"], [onclick], [tabindex]'
+                        );
+                        const spinners = body.querySelectorAll(
+                            '[role="progressbar"], [aria-busy="true"], ' +
+                            '.loading, .spinner, .skeleton, ' +
+                            '[class*="loading"], [class*="spinner"], [class*="skeleton"]'
+                        );
+                        return {
+                            text: visibleText.length,
+                            elems: interactive.length,
+                            spinning: spinners.length > 0,
+                        };
+                    }
+
+                    // Main document
+                    const main = countInDoc(document);
+                    let totalText = main.text;
+                    let totalElems = main.elems;
+                    let hasSpinner = main.spinning;
+                    let iframeCount = 0;
+                    let iframeReady = 0;
+
+                    // Also count content inside same‑origin iframes
+                    const iframes = document.querySelectorAll('iframe');
+                    for (const iframe of iframes) {
+                        iframeCount++;
+                        try {
+                            const doc = iframe.contentDocument || iframe.contentWindow.document;
+                            if (doc && doc.body) {
+                                const f = countInDoc(doc);
+                                totalText += f.text;
+                                totalElems += f.elems;
+                                if (f.spinning) hasSpinner = true;
+                                if (f.text >= 50 || f.elems >= 3) iframeReady++;
+                            }
+                        } catch(e) {
+                            // cross‑origin — can't access
+                        }
+                    }
+
                     return {
-                        text: visibleText.length,
-                        elems: interactive.length,
-                        spinning: spinners.length > 0,
+                        text: totalText,
+                        elems: totalElems,
+                        spinning: hasSpinner,
+                        iframes: iframeCount,
+                        iframesReady: iframeReady,
                     };
                 }""")
                 text_len = result.get("text", 0)
                 elem_count = result.get("elems", 0)
                 has_spinner = result.get("spinning", False)
+                iframe_count = result.get("iframes", 0)
+                iframe_ready = result.get("iframesReady", 0)
 
                 if text_len >= min_body_text and elem_count >= 3 and not has_spinner:
-                    logger.debug(f"Page ready: {text_len} chars, {elem_count} elements")
+                    iframe_info = f", {iframe_ready}/{iframe_count} iframes ready" if iframe_count else ""
+                    logger.debug(f"Page ready: {text_len} chars, {elem_count} elements{iframe_info}")
                     break
 
                 reason = ""
@@ -263,7 +302,7 @@ class LiveEnvironment(BaseEnvironment):
                     reason = f"elems={elem_count}/3"
                 elif has_spinner:
                     reason = "spinner present"
-                logger.debug(f"Waiting for page... ({reason}, poll {i + 1}/{max_polls})")
+                logger.debug(f"Waiting for page... ({reason}, {iframe_ready}/{iframe_count} iframes, poll {i + 1}/{max_polls})")
                 await self._page.wait_for_timeout(500)
             except Exception:
                 await self._page.wait_for_timeout(500)
@@ -473,29 +512,92 @@ class LiveEnvironment(BaseEnvironment):
     # Element interaction helpers (with coordinate fallback)
     # ------------------------------------------------------------------
 
+    async def _find_element_in_frames(self, element_id: str) -> tuple:
+        """Search [data-som-id=X] across main document AND all iframes.
+
+        QQ Mail and other webmail clients render compose/inbox views
+        inside iframes.  The main-document querySelectorAll misses every
+        element inside those frames.
+
+        Returns:
+            (frame, selector) tuple where `frame` is the Frame that
+            contains the element (or the Page for main-document elements),
+            or (None, None) if not found in any frame.
+        """
+        selector = f"[data-som-id='{element_id}']"
+
+        # 1) Main document
+        try:
+            el = await self._page.query_selector(selector)
+            if el:
+                return self._page, selector
+        except Exception:
+            pass
+
+        # 2) All sub-frames
+        for frame in self._page.frames:
+            if frame == self._page.main_frame:
+                continue  # already checked above
+            try:
+                el = await frame.query_selector(selector)
+                if el:
+                    return frame, selector
+            except Exception:
+                continue
+
+        return None, None
+
     async def _resolve_element_target(
         self, element_id: str, bridge: DOMBridge | None
     ) -> tuple[float, float]:
         """Resolve element center coordinates — live DOM query preferred.
 
+        Searches across main document AND iframes (QQ Mail pattern).
         Bridge bbox can be stale after page changes, so we query the
         element's current position via data-som-id first.
         """
-        # Primary: live DOM position (survives page changes)
-        try:
-            result = await self._page.evaluate(f"""
-                (() => {{
-                    const el = document.querySelector('[data-som-id="{element_id}"]');
-                    if (!el) return null;
-                    const r = el.getBoundingClientRect();
-                    if (r.width === 0 && r.height === 0) return null;
-                    return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }};
-                }})()
-            """)
-            if result and result["x"] is not None:
-                return result["x"], result["y"]
-        except Exception:
-            pass
+        # Primary: find element in main doc or frames
+        frame, _ = await self._find_element_in_frames(element_id)
+        if frame is not None:
+            try:
+                result = await frame.evaluate(f"""
+                    (() => {{
+                        const el = document.querySelector('[data-som-id="{element_id}"]');
+                        if (!el) return null;
+                        const r = el.getBoundingClientRect();
+                        if (r.width === 0 && r.height === 0) return null;
+                        return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }};
+                    }})()
+                """)
+                if result and result["x"] is not None:
+                    # Coordinates are relative to the frame's viewport.
+                    # If this is a sub-frame, we need to add the iframe's offset
+                    # so the returned coordinates are in page space.
+                    if frame != self._page:
+                        try:
+                            iframe_offset = await self._page.evaluate(f"""
+                                (() => {{
+                                    const iframes = document.querySelectorAll('iframe');
+                                    for (const if of iframes) {{
+                                        try {{
+                                            const doc = if.contentDocument || if.contentWindow.document;
+                                            if (doc && doc.querySelector('[data-som-id="{element_id}"]')) {{
+                                                const r = if.getBoundingClientRect();
+                                                return {{ left: r.left, top: r.top }};
+                                            }}
+                                        }} catch(e) {{}}
+                                    }}
+                                    return null;
+                                }})()
+                            """)
+                            if iframe_offset:
+                                result["x"] += iframe_offset["left"]
+                                result["y"] += iframe_offset["top"]
+                        except Exception:
+                            pass
+                    return result["x"], result["y"]
+            except Exception:
+                pass
 
         # Fallback: bridge bbox (may be stale)
         if bridge is None:
@@ -512,7 +614,8 @@ class LiveEnvironment(BaseEnvironment):
     ) -> bool:
         """Try to interact with an element via JavaScript.
 
-        Layered approach:
+        Searches across main document AND iframes (QQ Mail pattern).
+        Layered interaction approach:
         1. Dispatch full MouseEvent sequence (triggers JS listeners)
         2. Call el.click() for default navigation behavior
         3. For div/span containers: find inner <a> and click it
@@ -543,15 +646,46 @@ class LiveEnvironment(BaseEnvironment):
             js_action = """
                 el.scrollIntoView({block: 'center', inline: 'center', behavior: 'auto'});
                 el.focus();
-                if (typeof el.select === 'function') { el.select(); }
-                else if (el.setSelectionRange) { el.setSelectionRange(0, el.value.length); }
-                else { el.click(); }
+                if (typeof el.select === 'function') {
+                    el.select();
+                } else if (el.setSelectionRange) {
+                    el.setSelectionRange(0, el.value.length);
+                } else if (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) {
+                    // Rich-text editor (e.g. QQ Mail compose body) —
+                    // select all content so the following Backspace clears it
+                    try {
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } catch(e) {
+                        el.click();
+                        el.focus();
+                    }
+                } else {
+                    // Plain div/span — click to focus, then the keyboard
+                    // events will be dispatched to the focused element
+                    const r = el.getBoundingClientRect();
+                    const cx = r.left + r.width / 2;
+                    const cy = r.top + r.height / 2;
+                    el.dispatchEvent(new MouseEvent('mousedown', {view: window, bubbles: true, cancelable: true, clientX: cx, clientY: cy}));
+                    el.dispatchEvent(new MouseEvent('mouseup', {view: window, bubbles: true, cancelable: true, clientX: cx, clientY: cy}));
+                    el.dispatchEvent(new MouseEvent('click', {view: window, bubbles: true, cancelable: true, clientX: cx, clientY: cy}));
+                    if (typeof el.click === 'function') el.click();
+                    el.focus();
+                }
             """
         else:
             js_action = "el.click();"
 
         try:
-            result = await self._page.evaluate(f"""
+            # Find the element in main document or any sub-frame
+            frame, _ = await self._find_element_in_frames(element_id)
+            if frame is None:
+                return False
+
+            result = await frame.evaluate(f"""
                 (() => {{
                     try {{
                         const el = document.querySelector('[data-som-id="{element_id}"]');
@@ -568,24 +702,30 @@ class LiveEnvironment(BaseEnvironment):
     async def _click_element(
         self, action: Action, bridge: DOMBridge | None
     ) -> None:
-        """Click an element using 4-layer fallback.
+        """Click an element using 4-layer fallback, frame‑aware.
 
         Priority:
-        1. Playwright native (trusted isTrusted=true events)
-        2. JS MouseEvent + el.click() via data-som-id
-        3. elementFromPoint at expected coordinates (survives DOM replacement)
-        4. Coordinate scroll + center-click (last resort)
+        1. Playwright native in the correct frame (trusted isTrusted=true)
+        2. JS MouseEvent + el.click() via data-som-id (frame‑aware)
+        3. href navigation: extract href and goto directly
+        4. elementFromPoint at expected coordinates (survives DOM replacement)
+        5. Coordinate scroll + center-click (last resort)
         """
         eid = action.element_id
         selector = f"[data-som-id='{eid}']"
 
-        # 1) Playwright native click
-        try:
-            await self._page.click(selector, timeout=3000, force=True)
-            logger.debug(f"Click OK on #{eid} (Playwright)")
-            return
-        except Exception as e1:
-            logger.debug(f"Playwright click failed on #{eid}: {e1}")
+        # 1) Playwright native click — frame‑aware
+        frame, _ = await self._find_element_in_frames(eid)
+        if frame is not None:
+            try:
+                if frame == self._page:
+                    await self._page.click(selector, timeout=3000, force=True)
+                else:
+                    await frame.click(selector, timeout=3000, force=True)
+                logger.debug(f"Click OK on #{eid} (Playwright)")
+                return
+            except Exception as e1:
+                logger.debug(f"Playwright click failed on #{eid}: {e1}")
 
         # 2) JS MouseEvent + el.click() + inner <a> via data-som-id
         if await self._try_js_interact(eid, "click"):
@@ -637,6 +777,7 @@ class LiveEnvironment(BaseEnvironment):
     ) -> bool:
         """Extract href from an element and navigate directly.
 
+        Frame‑aware: searches main document AND iframes.
         Strategies (tried in order):
         1. Check [data-som-id] element for <a> tag or child <a>
         2. elementsFromPoint at the element's position (survives stale DOM)
@@ -644,8 +785,13 @@ class LiveEnvironment(BaseEnvironment):
 
         Bypasses click interception on sites like Bing.
         """
+        # Frame‑aware lookup first
+        frame, _ = await self._find_element_in_frames(element_id)
+
         try:
-            href = await self._page.evaluate(f"""
+            # Use the frame that contains the element (or main page as fallback)
+            eval_frame = frame if frame is not None else self._page
+            href = await eval_frame.evaluate(f"""
                 (() => {{
                     const el = document.querySelector('[data-som-id="{element_id}"]');
 
@@ -732,7 +878,10 @@ class LiveEnvironment(BaseEnvironment):
     async def _type_in_element(
         self, action: Action, bridge: DOMBridge | None
     ) -> None:
-        """Type text: JS focus + fill, data-som-id fill, or coordinate typing."""
+        """Type text: JS focus + fill, data-som-id fill, or coordinate typing.
+
+        Frame‑aware: searches main document AND iframes.
+        """
         eid = action.element_id
         value = action.value or ""
 
@@ -743,14 +892,16 @@ class LiveEnvironment(BaseEnvironment):
             logger.debug(f"JS type OK on #{eid}: '{value[:30]}'")
             return
 
-        # 2) Playwright fill via data-som-id
-        selector = f"[data-som-id='{eid}']"
-        try:
-            await self._page.fill(selector, value, timeout=3000)
-            logger.debug(f"Selector fill OK on #{eid}")
-            return
-        except Exception:
-            pass
+        # 2) Playwright fill via data-som-id — frame‑aware
+        frame, _ = await self._find_element_in_frames(eid)
+        if frame is not None:
+            selector = f"[data-som-id='{eid}']"
+            try:
+                await frame.fill(selector, value, timeout=3000)
+                logger.debug(f"Selector fill OK on #{eid}")
+                return
+            except Exception:
+                pass
 
         # 3) Coordinate fallback: scroll to center, triple-click, type
         cx, cy = await self._resolve_element_target(eid, bridge)
@@ -766,7 +917,10 @@ class LiveEnvironment(BaseEnvironment):
     async def _select_in_element(
         self, action: Action, bridge: DOMBridge | None
     ) -> None:
-        """Select option: JS focus, data-som-id selector, or coordinate fallback."""
+        """Select option: JS focus, data-som-id selector, or coordinate fallback.
+
+        Frame‑aware: searches main document AND iframes.
+        """
         eid = action.element_id
         value = action.value or ""
 
@@ -777,14 +931,16 @@ class LiveEnvironment(BaseEnvironment):
             logger.debug(f"JS select OK on #{eid}: '{value[:30]}'")
             return
 
-        # 2) Playwright select_option via data-som-id
-        selector = f"[data-som-id='{eid}']"
-        try:
-            await self._page.select_option(selector, value, timeout=3000)
-            logger.debug(f"Selector select OK on #{eid}")
-            return
-        except Exception:
-            pass
+        # 2) Playwright select_option via data-som-id — frame‑aware
+        frame, _ = await self._find_element_in_frames(eid)
+        if frame is not None:
+            selector = f"[data-som-id='{eid}']"
+            try:
+                await frame.select_option(selector, value, timeout=3000)
+                logger.debug(f"Selector select OK on #{eid}")
+                return
+            except Exception:
+                pass
 
         # 3) Coordinate fallback
         cx, cy = await self._resolve_element_target(eid, bridge)

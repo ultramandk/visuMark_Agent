@@ -177,9 +177,10 @@ async def ws_agent(ws: WebSocket):
 
     env = LiveEnvironment(headless=headless, viewport=(1280, 720))
     perceptor = SoMPerceptor({
-        "max_elements": 200,
-        "font_size": 14,
+        "max_elements": 60,
+        "font_size": 11,
         "use_accessibility_tree": True,
+        "show_text_hints": False,
     })
     reasoner = ReasonerFactory.create(
         provider=provider,
@@ -201,10 +202,25 @@ async def ws_agent(ws: WebSocket):
     # Background listener for "continue" messages during CAPTCHA pause
     agent_task: asyncio.Task | None = None
 
+    # Signal set when the WebSocket connection is lost — callbacks
+    # check this before sending and the agent loop exits cleanly.
+    ws_disconnected = asyncio.Event()
+
     class WSCallbacks(StepCallbacks):
+        async def _safe_send(self, data: dict) -> bool:
+            """Send JSON over WS, return False if the connection is dead."""
+            if ws_disconnected.is_set():
+                return False
+            try:
+                await ws.send_json(data)
+                return True
+            except Exception:
+                ws_disconnected.set()
+                return False
+
         async def on_captcha(self, screenshot: bytes) -> None:
             b64 = base64.b64encode(screenshot).decode("utf-8") if screenshot else None
-            await ws.send_json({
+            await self._safe_send({
                 "type": "captcha_required",
                 "screenshot": b64,
                 "message": "检测到验证码，请在浏览器窗口中手动完成操作后点击继续",
@@ -212,7 +228,7 @@ async def ws_agent(ws: WebSocket):
 
         async def on_perceive(self, step: int, screenshot: bytes, elements_count: int) -> None:
             b64 = base64.b64encode(screenshot).decode("utf-8") if screenshot else None
-            await ws.send_json({
+            await self._safe_send({
                 "type": "step_phase",
                 "step": step,
                 "phase": "perceive",
@@ -221,7 +237,7 @@ async def ws_agent(ws: WebSocket):
             })
 
         async def on_reasoning(self, step: int) -> None:
-            await ws.send_json({
+            await self._safe_send({
                 "type": "step_phase",
                 "step": step,
                 "phase": "reasoning",
@@ -231,7 +247,7 @@ async def ws_agent(ws: WebSocket):
             b64_hs = None
             if highlighted_screenshot:
                 b64_hs = base64.b64encode(highlighted_screenshot).decode("utf-8")
-            await ws.send_json({
+            await self._safe_send({
                 "type": "step_phase",
                 "step": step,
                 "phase": "acting",
@@ -243,7 +259,7 @@ async def ws_agent(ws: WebSocket):
             })
 
         async def on_verifying(self, step: int) -> None:
-            await ws.send_json({
+            await self._safe_send({
                 "type": "step_phase",
                 "step": step,
                 "phase": "verifying",
@@ -285,7 +301,7 @@ async def ws_agent(ws: WebSocket):
                 if record.verification.retry_action is not None:
                     verify_data["retry_action"] = record.verification.retry_action.to_dict()
 
-            await ws.send_json({
+            await self._safe_send({
                 "type": "step",
                 "step": record.step,
                 "action": action_data.get("action"),
@@ -302,7 +318,7 @@ async def ws_agent(ws: WebSocket):
             })
 
         async def on_done(self, record) -> None:
-            await ws.send_json({
+            await self._safe_send({
                 "type": "done",
                 "success": record.success,
                 "answer": record.answer,
@@ -318,13 +334,14 @@ async def ws_agent(ws: WebSocket):
 
     async def listen_for_continue():
         """Background task: listen for 'continue' from client while agent runs."""
-        while True:
+        while not ws_disconnected.is_set():
             try:
                 raw = await ws.receive_text()
                 msg = json.loads(raw)
                 if msg.get("type") == "continue":
                     agent.resume()
             except WebSocketDisconnect:
+                ws_disconnected.set()
                 break
             except Exception:
                 pass
@@ -332,15 +349,18 @@ async def ws_agent(ws: WebSocket):
     agent_task = asyncio.create_task(agent.run(task, callbacks=WSCallbacks()))
     listener_task = asyncio.create_task(listen_for_continue())
 
-    # Wait for agent to finish, then cancel listener
+    # Wait for agent to finish, then cancel listener.
+    # If the WS disconnects mid-task, the callbacks set ws_disconnected
+    # and stop sending — the agent eventually finishes (or is cancelled
+    # by the error handler in agent.run).
     try:
         await agent_task
-    except Exception as exc:
-        try:
-            await ws.send_json({"type": "error", "message": str(exc)})
-        except Exception:
-            pass
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
     finally:
+        ws_disconnected.set()
         if listener_task and not listener_task.done():
             listener_task.cancel()
         try:

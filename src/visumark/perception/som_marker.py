@@ -95,7 +95,7 @@ class SoMMarker:
 
     def __init__(
         self,
-        font_size: int = 14,
+        font_size: int = 11,
         border_color: str = "#E53E3E",
         border_width: int = 2,
         show_labels: bool = True,
@@ -116,6 +116,11 @@ class SoMMarker:
     ) -> bytes:
         """Draw SoM overlays on a screenshot and return an annotated PNG.
 
+        Labels are placed using overlap avoidance: for each element, up to
+        5 candidate positions are tried and the first one that doesn't
+        overlap any previously placed label is used.  This dramatically
+        reduces label collisions on dense pages (e.g. QQ Mail inbox).
+
         Args:
             screenshot: Raw PNG bytes of the page screenshot.
             elements: List of PageElement objects to annotate.
@@ -132,6 +137,9 @@ class SoMMarker:
         draw = ImageDraw.Draw(overlay)
         font = _get_font(self.font_size)
         small_font = _get_font(max(9, self.font_size - 4))
+
+        # Track placed label rects for overlap avoidance
+        placed_labels: list[tuple[int, int, int, int]] = []
 
         for elem in elements:
             color = self.COLORS[(int(elem.id) - 1) % len(self.COLORS)]
@@ -165,48 +173,74 @@ class SoMMarker:
             if not self.show_labels:
                 continue
 
-            # --- Label badge ---
+            # --- Label badge with overlap avoidance ---
             label = str(elem.id)
             tbox = draw.textbbox((0, 0), label, font=font)
             tw, th = tbox[2] - tbox[0], tbox[3] - tbox[1]
             pad_x, pad_y = 4, 2
+            lw = tw + pad_x * 2   # total label width
+            lh = th + pad_y * 2   # total label height
 
-            # Position label at top-left corner of the element box
-            label_x = x
-            label_y = y - th - pad_y * 2
+            # Try 2 candidate positions, pick the first non-overlapping one
+            candidates = [
+                # (bg_x1, bg_y1) — top-left of the label background
+                (x,                y - lh),          # above, align-left
+                (x,                y + 2),           # inside top-left (fallback)
+            ]
 
-            # If label would go above the viewport, place it inside the element
-            if label_y < 0:
-                label_y = y + 2
+            best_pos = candidates[0]  # default: above-left
+            for cx_pos, cy_pos in candidates:
+                # Skip positions outside the image
+                if cy_pos < 0 or cy_pos + lh > viewport_h:
+                    continue
+                if cx_pos < 0 or cx_pos + lw > viewport_w:
+                    continue
 
-            # Draw label background rounded rect
-            bg_x1 = label_x
-            bg_y1 = label_y
-            bg_x2 = label_x + tw + pad_x * 2
-            bg_y2 = label_y + th + pad_y * 2
+                # Check overlap with previously placed labels
+                overlaps = False
+                for px, py, pw, ph in placed_labels:
+                    # AABB overlap test
+                    if (cx_pos < px + pw and cx_pos + lw > px and
+                        cy_pos < py + ph and cy_pos + lh > py):
+                        overlaps = True
+                        break
 
+                if not overlaps:
+                    best_pos = (cx_pos, cy_pos)
+                    break
+
+            bg_x1, bg_y1 = best_pos
+
+            # Draw label background
             draw.rectangle(
-                [bg_x1, bg_y1, bg_x2, bg_y2],
+                [bg_x1, bg_y1, bg_x1 + lw, bg_y1 + lh],
                 fill=color,
             )
             draw.text(
-                (label_x + pad_x, label_y + pad_y),
+                (bg_x1 + pad_x, bg_y1 + pad_y),
                 label,
                 fill="#FFFFFF",
                 font=font,
             )
 
+            # Record this label's position
+            placed_labels.append((bg_x1, bg_y1, lw, lh))
+
             # --- Optional text hint ---
             if self.show_text_hints and elem.text:
                 hint = elem.text[:30]
-                hint_y = bg_y2 + 2
+                hbox = draw.textbbox((0, 0), hint, font=small_font)
+                hw = hbox[2] - hbox[0]
+                hint_y = bg_y1 + lh + 2
                 if hint_y + th < viewport_h:
                     draw.text(
-                        (label_x, hint_y),
+                        (bg_x1, hint_y),
                         hint,
                         fill=color,
                         font=small_font,
                     )
+                    # Also track the text hint rect for overlap avoidance
+                    placed_labels.append((bg_x1, hint_y, hw + 4, th))
 
         # Composite overlay onto original image
         image = Image.alpha_composite(image, overlay)
@@ -220,7 +254,7 @@ class SoMMarker:
 def marker_factory(config: dict) -> SoMMarker:
     """Create a SoMMarker instance from configuration dict."""
     return SoMMarker(
-        font_size=config.get("font_size", 14),
+        font_size=config.get("font_size", 11),
         border_color=config.get("border_color", "#E53E3E"),
         border_width=config.get("border_width", 2),
         show_labels=config.get("show_labels", True),

@@ -313,6 +313,102 @@ def _build_extraction_js(
         console.debug('SPA fallback scan: found', candidates.length, 'cursor-pointer elements');
     }}
 
+    // ── iframe traversal: scan inside same‑origin iframes ──
+    //     QQ Mail and many webmail clients render their compose / inbox
+    //     views inside iframes.  The main‑document scan misses all
+    //     interactive elements inside those frames.
+    if (candidates.length < MAX) {{
+        const iframes = document.querySelectorAll('iframe');
+        for (const iframe of iframes) {{
+            if (candidates.length >= MAX) break;
+
+            let doc = null;
+            try {{
+                doc = iframe.contentDocument || iframe.contentWindow.document;
+            }} catch(e) {{
+                continue;  // cross‑origin — can't access
+            }}
+            if (!doc || !doc.body) continue;
+
+            // Compute iframe offset so we can translate coordinates
+            // into the main‑document coordinate space
+            const iframeRect = iframe.getBoundingClientRect();
+            const offsetX = iframeRect.left;
+            const offsetY = iframeRect.top;
+
+            const frameElements = doc.querySelectorAll(SELECTOR);
+            for (const el of frameElements) {{
+                if (candidates.length >= MAX) break;
+
+                // Visibility within the iframe
+                const style = doc.defaultView.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden') continue;
+                if (style.opacity === '0') continue;
+
+                let tag = el.tagName.toLowerCase();
+                let rect = el.getBoundingClientRect();
+                let area = rect.width * rect.height;
+
+                // Translate to main‑document coordinates
+                const mainX = rect.left + offsetX;
+                const mainY = rect.top + offsetY;
+                // Recompute area in main coords (should be same, but safety)
+                const mainW = rect.width;
+                const mainH = rect.height;
+                const mainArea = mainW * mainH;
+
+                // Apply same size/visibility thresholds as main scan
+                const hasAriaLabel = !!el.getAttribute('aria-label');
+                const rawText = (el.innerText || el.textContent || '').trim();
+                const elStyle = doc.defaultView.getComputedStyle(el);
+                const hasPointerCursor = elStyle.cursor === 'pointer';
+                const isFrameworkButton = hasPointerCursor && rawText.length >= 1 && rawText.length <= 8;
+                const isKnownInteractive = INTERACTIVE_TAGS.has(tag)
+                    || (!!el.getAttribute('role') && INTERACTIVE_ROLES.has(el.getAttribute('role')))
+                    || hasAriaLabel
+                    || isFrameworkButton;
+                const sizeThreshold = isKnownInteractive ? 1 : MIN_SIZE;
+
+                if (mainArea < sizeThreshold) continue;
+
+                // Off‑screen / out‑of‑viewport check (main‑document coords)
+                if (mainY + mainH < -500 || mainY > VH + 500) continue;
+                if (mainX + mainW < -500 || mainX > VW + 500) continue;
+
+                // Attributes
+                const attrs = {{}};
+                for (const k of KEY_ATTRS) {{
+                    const v = el.getAttribute(k);
+                    if (v !== null && v !== '') attrs[k] = v;
+                }}
+
+                const text = getText(el);
+                const backendId = attrs['data-backend-node-id'] || null;
+
+                // ATS fusion
+                if (ATS_MAP && backendId && ATS_MAP[backendId]) {{
+                    const ats = ATS_MAP[backendId];
+                    if (!attrs['role'] && ats.role) attrs['role'] = ats.role;
+                }}
+
+                const selector = buildSelector(tag, attrs);
+
+                candidates.push({{
+                    tag: tag,
+                    text: text,
+                    x: mainX,
+                    y: mainY,
+                    w: mainW,
+                    h: mainH,
+                    attributes: attrs,
+                    backend_node_id: backendId,
+                    selector: selector,
+                }});
+            }}
+            console.debug('iframe scan: found', candidates.length, 'total candidates after frame check');
+        }}
+    }}
+
     // 2. Sort by visual position: top→bottom, left→right
     candidates.sort((a, b) => {{
         const dy = a.y - b.y;
@@ -330,14 +426,38 @@ def _build_extraction_js(
         // share the same tag/class (e.g. multiple <div.xmail-ui-btn>).
         // elementFromPoint at bbox center finds the actual element under
         // the cursor, not the first match of a generic selector.
+        //
+        // Also pierces through iframes: if elementFromPoint hits an
+        // iframe, we look inside it at the relative coordinates.
+        // This is critical for QQ Mail and other webmail clients that
+        // render their UI inside iframes.
         try {{
             const cx = candidates[i].x + candidates[i].w / 2;
             const cy = candidates[i].y + candidates[i].h / 2;
-            const atPoint = document.elementFromPoint(cx, cy);
+            let atPoint = document.elementFromPoint(cx, cy);
+
+            // ── iframe piercing ──
+            if (atPoint && atPoint.tagName === 'IFRAME') {{
+                try {{
+                    const iframeDoc = atPoint.contentDocument || atPoint.contentWindow.document;
+                    if (iframeDoc) {{
+                        const iframeRect = atPoint.getBoundingClientRect();
+                        const relX = cx - iframeRect.left;
+                        const relY = cy - iframeRect.top;
+                        const inner = iframeDoc.elementFromPoint(relX, relY);
+                        if (inner && inner !== iframeDoc.body && inner !== iframeDoc.documentElement) {{
+                            atPoint = inner;
+                        }}
+                    }}
+                }} catch(e) {{
+                    // cross‑origin iframe — can't access, leave atPoint as iframe
+                }}
+            }}
+
             if (atPoint && atPoint !== document.body && atPoint !== document.documentElement) {{
                 atPoint.setAttribute('data-som-id', String(id));
             }} else {{
-                // Fallback: CSS selector
+                // Fallback: CSS selector (main document only)
                 const el = document.querySelector(candidates[i].selector);
                 if (el) el.setAttribute('data-som-id', String(id));
             }}

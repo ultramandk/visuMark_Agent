@@ -112,6 +112,7 @@ def build_data_som_id_script(id_to_selector: dict[str, str]) -> str:
 # Primary: standard interactive HTML elements + ARIA roles
 INTERACTIVE_SELECTOR = (
     "button, a, input, select, textarea, "
+    "[contenteditable='true'], "   # Rich-text editors (e.g. QQ Mail compose body)
     "[role='button'], [role='link'], [role='checkbox'], [role='radio'], "
     "[role='radiogroup'], [role='combobox'], [role='listbox'], "
     "[role='menu'], [role='menuitem'], [role='tab'], [role='switch'], "

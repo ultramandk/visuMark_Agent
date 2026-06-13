@@ -70,14 +70,22 @@ The "plan" field should describe your HIGH-LEVEL goal — what you intend to acc
 
 11. !! CRITICAL — LOGIN PAGES !!
 You do NOT have any usernames, passwords, or credentials. You CANNOT log in by yourself.
-If the current page is ANY kind of login or authentication page — including but not limited to:
-   - Username/password fields
-   - QR code login (WeChat/QQ/Alipay scan)
-   - 登录 / 登入 / Sign in / Log in buttons
-   - Account selection pages
-   - SMS/phone verification
-   - 微信登录 / QQ登录 / 邮箱登录 options
-→ IMMEDIATELY output {"action": "captcha", "value": "需要人工登录"}.
+
+IMPORTANT — Before calling CAPTCHA, check whether the user is ALREADY logged in:
+   - If you can see a user avatar, nickname, "退出/logout" link, inbox, or account dashboard
+     → the user IS already logged in. Do NOT call CAPTCHA. Proceed with the task normally.
+   - A "登录/sign in" link in the website header/nav does NOT mean the page requires login.
+     Many sites show a login link even to logged-out users as normal navigation chrome.
+   - Only call CAPTCHA when the page is ACTIVELY blocking you with a login wall:
+     a) The page has a visible username AND password input that you must fill to proceed
+     b) A QR code login prompt is the ONLY way to access the site
+     c) A phone/SMS verification is required before you can continue
+     d) The page explicitly says "请先登录" / "Please sign in to continue"
+
+If none of (a)-(d) apply, do NOT call CAPTCHA. Try to find the information or complete the
+task using the visible page content.
+
+When login IS genuinely required → output {"action": "captcha", "value": "需要人工登录"}.
 Do NOT click any login buttons. Do NOT try to fill in credentials. Do NOT attempt to navigate away. Just STOP and let the human handle it.
 
 ## CORRECT examples
