@@ -716,6 +716,16 @@ html, body {
 .btn-continue:hover { transform: translateY(-1px); box-shadow: var(--shadow-glow-blue); }
 .btn-continue:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+/* Login variant — blue theme instead of warning yellow */
+.message.captcha.login-variant .bubble {
+    background: rgba(94, 156, 255, 0.06);
+    border-color: rgba(94, 156, 255, 0.3);
+}
+.message.captcha.login-variant .captcha-title { color: var(--accent); }
+.message.captcha.login-variant .btn-continue {
+    background: var(--gradient-accent);
+}
+
 /* ==================================================================
    Result Message
    ================================================================== */

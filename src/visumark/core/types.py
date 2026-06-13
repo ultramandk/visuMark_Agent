@@ -96,8 +96,8 @@ class Action:
 
     @property
     def is_terminal(self) -> bool:
-        """Whether this action ends the task."""
-        return self.action_type in (ActionType.ANSWER, ActionType.FAIL)
+        """Whether this action ends the step — no verification needed."""
+        return self.action_type in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA)
 
 
 # ============================================================================

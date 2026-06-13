@@ -76,8 +76,11 @@ class StepCallbacks:
         """Step complete — frontend shows final result."""
         pass
 
-    async def on_captcha(self, screenshot: bytes) -> None:
-        """CAPTCHA detected — agent pauses for manual intervention."""
+    async def on_captcha(self, screenshot: bytes, variant: str = "captcha") -> None:
+        """CAPTCHA detected — agent pauses for manual intervention.
+
+        variant: 'captcha' (VLM-detected CAPTCHA) or 'login' (programmatic login detection)
+        """
         pass
 
     async def on_done(self, record: TaskRecord) -> None:
@@ -206,7 +209,7 @@ class Agent:
                     vlm_url = record.perception.page_url
                     vlm_domain = self._extract_domain(vlm_url)
                     logger.info(f"CAPTCHA detected by VLM — pausing ({vlm_domain})")
-                    await callbacks.on_captcha(record.perception.screenshot)
+                    await callbacks.on_captcha(record.perception.screenshot, variant="captcha")
                     self._paused.clear()
                     await self._paused.wait()
                     # Dismissal tracking — avoid re-triggering
@@ -647,6 +650,7 @@ class Agent:
         pre_screenshot: bytes,
         task: str,
         page_url: str = "",
+        pre_clean_screenshot: bytes | None = None,
     ) -> tuple[VerificationResult | None, bytes]:
         """Verify whether the executed action achieved its intended effect.
 
@@ -680,13 +684,15 @@ class Agent:
             logger.warning(f"Failed to take post-action screenshot: {exc}")
             return None, empty
 
-        # Guard against blank post-screenshot (page crashed)
-        from visumark.utils.image import is_blank_screenshot
+        # Fast pixel-diff: if screenshots are identical, the action had
+        # zero visible effect.  Skip VLM call — the answer is obvious.
+        from visumark.utils.image import are_screenshots_identical
 
-        if is_blank_screenshot(post_screenshot, variance_threshold=20.0):
+        pre_clean = pre_clean_screenshot or pre_screenshot
+        if are_screenshots_identical(pre_clean, post_screenshot):
             return VerificationResult(
                 effect_achieved=False,
-                observation="Post-action screenshot is blank — page may have crashed",
+                observation="Screenshots are identical — action had no visible effect",
                 should_retry=False,
             ), post_screenshot
 
@@ -764,7 +770,7 @@ class Agent:
             login_domain = self._extract_domain(login_url)
 
             logger.info(f"Login page detected programmatically — pausing ({login_domain})")
-            await cb.on_captcha(perception.screenshot)
+            await cb.on_captcha(perception.screenshot, variant="login")
             self._paused.clear()
             await self._paused.wait()
 
@@ -851,6 +857,7 @@ class Agent:
                     pre_screenshot=pre_img,
                     task=task_description,
                     page_url=perception.page_url,
+                    pre_clean_screenshot=perception.screenshot,
                 )
                 if verification is None:
                     break  # Technical failure — skip verification

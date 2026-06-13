@@ -43,9 +43,11 @@ class ElementExtractor:
         page: Page,
         ats_nodes: list[dict] | None = None,
     ) -> list[PageElement]:
-        """Extract interactive elements from the current page.
+        """Extract interactive elements from the current page, including iframes.
 
-        All DOM access happens in one atomic JS call → zero stale handles.
+        QQ Mail (old version) and many webmail clients render compose forms
+        inside <iframe> elements.  We scan every frame and offset coordinates
+        by the iframe's position so bboxes are relative to the top-level page.
         """
         viewport = page.viewport_size or {"width": 1280, "height": 720}
         vw, vh = viewport["width"], viewport["height"]
@@ -61,14 +63,46 @@ class ElementExtractor:
                         "name": node.get("name", ""),
                     }
 
-        # ── Single JS evaluation: extract everything atomically ──
-        raw_elements = await page.evaluate(
-            _build_extraction_js(viewport, ats_map, self.max_elements, self.min_element_size)
-        )
+        # ── Scan every frame (main + iframes) ──
+        js_code = _build_extraction_js(viewport, ats_map, self.max_elements, self.min_element_size)
+        all_raw: list[dict] = []
+
+        for frame in page.frames:
+            # Determine iframe offset relative to top-level page
+            offset_x, offset_y = 0, 0
+            if frame != page.main_frame:
+                try:
+                    iframe_el = await frame.frame_element()
+                    if iframe_el:
+                        bbox = await iframe_el.bounding_box()
+                        if bbox:
+                            offset_x = bbox["x"]
+                            offset_y = bbox["y"]
+                except Exception:
+                    pass  # OOPIF / cross-origin — skip this frame
+
+            # Run extraction JS in this frame
+            try:
+                raw_elements = await frame.evaluate(js_code)
+            except Exception:
+                continue
+
+            # Offset coordinates by iframe position
+            if offset_x or offset_y:
+                for raw in raw_elements:
+                    raw["x"] += offset_x
+                    raw["y"] += offset_y
+
+            all_raw.extend(raw_elements)
+
+        # ── Sort and reassign IDs across all frames ──
+        all_raw.sort(key=lambda r: (r["y"], r["x"]))
+        for i, raw in enumerate(all_raw):
+            raw["id"] = str(i + 1)
 
         # Convert raw JS objects to PageElement dataclasses
         elements: list[PageElement] = []
-        for raw in raw_elements:
+        for raw in all_raw:
             elements.append(PageElement(
                 id=str(raw["id"]),
                 tag=raw["tag"],
@@ -84,7 +118,7 @@ class ElementExtractor:
                 selector=raw.get("selector", raw["tag"]),
             ))
 
-        logger.debug(f"Extracted {len(elements)} interactive elements (atomic JS)")
+        logger.debug(f"Extracted {len(elements)} interactive elements ({len(page.frames)} frames)")
         return elements
 
 
@@ -171,10 +205,34 @@ def _build_extraction_js(
         const style = window.getComputedStyle(el);
         if (style.display === 'none' || style.visibility === 'hidden') continue;
         if (style.opacity === '0') continue;
+        // Not interactive: disabled or pointer-events:none
+        if (el.disabled || el.getAttribute('disabled') !== null) continue;
+        if (style.pointerEvents === 'none') continue;
 
         let tag = el.tagName.toLowerCase();
         let rect = el.getBoundingClientRect();
         let area = rect.width * rect.height;
+
+        // ── Narrow input expansion ──
+        // QQ Mail recipient fields: <input> inside 13px-wide container
+        // with overflow:hidden.  The real clickable area is the ancestor
+        // div with cursor:text that spans the full width.
+        if (tag === 'input' && rect.width < 50) {{
+            let p = el.parentElement;
+            for (let d = 0; d < 4 && p; d++, p = p.parentElement) {{
+                const ps = window.getComputedStyle(p);
+                if (ps.cursor === 'text' || ps.cursor === 'pointer') {{
+                    const pr = p.getBoundingClientRect();
+                    if (pr.width > rect.width * 2 && pr.height >= rect.height * 0.8) {{
+                        el = p;
+                        tag = p.tagName.toLowerCase();
+                        rect = pr;
+                        area = rect.width * rect.height;
+                        break;
+                    }}
+                }}
+            }}
+        }}
 
         // ── Size check with relaxed thresholds ──
         // Interactive HTML tags (button, a, input, etc.) and aria-label
@@ -283,6 +341,8 @@ def _build_extraction_js(
 
             const style = window.getComputedStyle(el);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
+            if (el.disabled || el.getAttribute('disabled') !== null) continue;
+            if (style.pointerEvents === 'none') continue;
             if (style.cursor !== 'pointer') continue;
 
             const rect = el.getBoundingClientRect();
@@ -344,6 +404,8 @@ def _build_extraction_js(
                 const style = doc.defaultView.getComputedStyle(el);
                 if (style.display === 'none' || style.visibility === 'hidden') continue;
                 if (style.opacity === '0') continue;
+                if (el.disabled || el.getAttribute('disabled') !== null) continue;
+                if (style.pointerEvents === 'none') continue;
 
                 let tag = el.tagName.toLowerCase();
                 let rect = el.getBoundingClientRect();

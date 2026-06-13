@@ -62,8 +62,6 @@ class SoMPerceptor(BasePerceptor):
         Returns:
             (Perception, DOMBridge) tuple — ready for the reasoner.
         """
-        from visumark.utils.image import is_blank_screenshot
-
         page = env.page if hasattr(env, "page") else None
         if page is None:
             logger.warning("No Playwright page available — returning empty perception")
@@ -78,23 +76,8 @@ class SoMPerceptor(BasePerceptor):
             except Exception as exc:
                 logger.debug(f"wait_for_page_ready failed: {exc}")
 
-        # ── 1. Screenshot with blank-check retry ──
-        MAX_RETRIES = 5
-        screenshot = b""
-        for attempt in range(MAX_RETRIES):
-            screenshot = await env.screenshot()
-
-            if not is_blank_screenshot(screenshot, variance_threshold=20.0):
-                break  # Has real content
-
-            logger.warning(
-                f"Blank screenshot detected (attempt {attempt + 1}/{MAX_RETRIES}), "
-                f"waiting & retrying..."
-            )
-            if hasattr(env, "wait_for_page_ready"):
-                await env.wait_for_page_ready(settle_ms=2000 + attempt * 1500)
-            else:
-                await page.wait_for_timeout(2000 + attempt * 1500)
+        # ── 1. Screenshot ──
+        screenshot = await env.screenshot()
 
         # 2. Get Accessibility Tree (optional but recommended)
         ats_nodes = None

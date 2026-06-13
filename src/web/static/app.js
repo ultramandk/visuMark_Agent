@@ -587,14 +587,20 @@ function addResultMessage(success, answer, totalSteps, error) {
 
 function addCaptchaMessage(msg) {
     const div = document.createElement("div");
-    div.className = "message captcha";
+    const isLogin = msg.variant === "login";
+    const cssClass = isLogin ? "captcha login-variant" : "captcha captcha-variant";
+    const icon = isLogin ? "🔑" : "🔐";
+    const title = isLogin ? "需要人工登录" : "检测到验证码";
+    const btnText = isLogin ? "✅ 已登录，继续" : "✅ 已完成验证，继续";
+
+    div.className = "message " + cssClass;
     div.innerHTML = `
         <div class="bubble">
-            <div class="captcha-icon">🔐</div>
-            <div class="captcha-title">检测到验证码</div>
-            <div class="captcha-text">${escapeHtml(msg.message || "请在浏览器窗口手动完成验证码操作")}</div>
-            ${msg.screenshot ? `<img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="验证码页面" onclick="openLightbox(this.src)" loading="lazy" />` : ""}
-            <button class="btn-continue" onclick="continueTask(this)">✅ 已完成验证，继续</button>
+            <div class="captcha-icon">${icon}</div>
+            <div class="captcha-title">${title}</div>
+            <div class="captcha-text">${escapeHtml(msg.message || "请在浏览器窗口手动完成操作")}</div>
+            ${msg.screenshot ? `<img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="验证页面" onclick="openLightbox(this.src)" loading="lazy" />` : ""}
+            <button class="btn-continue" onclick="continueTask(this)">${btnText}</button>
             <div class="msg-time">${nowTime()}</div>
         </div>
     `;
@@ -701,6 +707,23 @@ btnNewTask.addEventListener("click", () => {
                 <button class="example-chip" data-task="中山大学广州校区南校园在哪里" data-url="https://www.bing.com">🏫 中山大学南校园</button>
                 <button class="example-chip" data-task="打开buff，查询精英之作的价格" data-url="https://www.bing.com">🎮 Buff 精英之作</button>
                 <button class="example-chip" data-task="登录QQ邮箱，给739862481@qq.com发送一封端午节祝福邮件，标题'端午安康'，正文简短的节日祝福即可" data-url="https://mail.qq.com">📧 QQ邮箱发端午祝福</button>
+                <button class="example-chip" data-task="今天天气怎么样" data-url="https://www.bing.com">🌤️ 查询今天天气</button>
+                <button class="example-chip" data-task="搜索从广州到北京的航班" data-url="https://www.bing.com">✈️ 广州到北京航班</button>
+                <button class="example-chip" data-task="华南理工大学有哪些王牌专业" data-url="https://www.bing.com">🏫 华工王牌专业</button>
+                <button class="example-chip" data-task="打开淘宝搜索机械键盘并告诉我前三名的价格" data-url="https://www.bing.com">🛒 淘宝搜索机械键盘</button>
+                <button class="example-chip" data-task="2026年世界杯在哪个国家举办" data-url="https://www.bing.com">⚽ 2026世界杯举办地</button>
+                <button class="example-chip" data-task="B站番剧排行榜第一名是什么" data-url="https://www.bing.com">📺 B站番剧排行榜</button>
+                <button class="example-chip" data-task="最新的特斯拉Model 3价格是多少" data-url="https://www.bing.com">🚗 特斯拉Model 3价格</button>
+                <button class="example-chip" data-task="帮我查一下深圳今天有什么演唱会" data-url="https://www.bing.com">🎵 深圳今日演唱会</button>
+                <button class="example-chip" data-task="Python和JavaScript哪个更适合初学者" data-url="https://www.bing.com">💻 编程语言对比</button>
+                <button class="example-chip" data-task="这个网页的标题和描述是什么" data-url="https://example.com">📄 读取网页信息</button>
+                <button class="example-chip" data-task="翻译 'Hello World' 到中文" data-url="https://fanyi.baidu.com">🌐 百度翻译</button>
+                <button class="example-chip" data-task="查询 serial 这个单词的含义" data-url="https://dict.cn">📖 词典查词</button>
+                <button class="example-chip" data-task="今天的NBA比赛结果是什么" data-url="https://www.baidu.com">🏀 NBA比赛结果</button>
+                <button class="example-chip" data-task="深圳到广州的高铁时刻表" data-url="https://www.baidu.com">🚄 高铁时刻表</button>
+                <button class="example-chip" data-task="豆瓣电影TOP250第一名是什么" data-url="https://www.baidu.com">🎬 豆瓣电影TOP250</button>
+                <button class="example-chip" data-task="查询人民币对美元的汇率" data-url="https://www.baidu.com">💰 汇率查询</button>
+                <button class="example-chip" data-task="今天有什么热门新闻" data-url="https://www.baidu.com">📰 今日热门新闻</button>
             </div>
         </div>
         <div class="typing-indicator" id="typing-indicator">

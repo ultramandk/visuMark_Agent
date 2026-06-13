@@ -454,7 +454,7 @@ class LiveEnvironment(BaseEnvironment):
                 ms = int(action.value or 1000)
                 await self._page.wait_for_timeout(ms)
 
-            elif atype in (ActionType.ANSWER, ActionType.FAIL):
+            elif atype in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA):
                 # Terminal actions — no browser operation needed
                 return True
 

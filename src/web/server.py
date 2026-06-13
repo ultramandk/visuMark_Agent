@@ -218,12 +218,18 @@ async def ws_agent(ws: WebSocket):
                 ws_disconnected.set()
                 return False
 
-        async def on_captcha(self, screenshot: bytes) -> None:
+        async def on_captcha(self, screenshot: bytes, variant: str = "captcha") -> None:
             b64 = base64.b64encode(screenshot).decode("utf-8") if screenshot else None
+            msg = (
+                "检测到登录页面，请在浏览器窗口中手动登录后点击继续"
+                if variant == "login" else
+                "检测到验证码，请在浏览器窗口中手动完成操作后点击继续"
+            )
             await self._safe_send({
                 "type": "captcha_required",
                 "screenshot": b64,
-                "message": "检测到验证码，请在浏览器窗口中手动完成操作后点击继续",
+                "message": msg,
+                "variant": variant,
             })
 
         async def on_perceive(self, step: int, screenshot: bytes, elements_count: int) -> None:

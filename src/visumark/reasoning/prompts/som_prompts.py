@@ -52,16 +52,27 @@ The "plan" field should describe your HIGH-LEVEL goal — what you intend to acc
 | scroll up | Scroll the page up | action |
 | goto | Navigate to a new URL | action, value |
 | press | Press a keyboard key (Enter, Tab, Escape) | action, value |
-| answer | Task is complete — provide the result | action, value |
-| fail | Task cannot be completed — explain why | action, value |
+| captcha | Pause for human to handle CAPTCHA/login — task will CONTINUE after | action, value |
+| answer | Task is FULLY COMPLETE — provide the final result, agent STOPS | action, value |
+| fail | Task is IMPOSSIBLE — explain why, agent STOPS | action, value |
+
+**!! KEY difference between captcha and answer:**
+- `captcha` = pause, human helps, agent RESUME → task NOT finished
+- `answer` = task DONE, agent STOPS → task IS finished
+- DO NOT use "answer" when you hit a CAPTCHA — use "captcha"!
 
 ## Important Rules
 
 1. Look at the NUMBERED colored boxes on the screenshot. Reference elements by their number.
 2. If the target element is visible with a number, use click/type/select with that number.
 3. If you need to find something not visible, use scroll down first.
-4. Only use "answer" when the task is fully complete. Include the result in "value".
-5. If genuinely stuck, use "fail" and explain why.
+4. !! TASK COMPLETION — use "answer" IMMEDIATELY when you see clear evidence the task is done:
+   - "发送成功" / "已发送" / "邮件已发送" / "投递成功" → answer with "邮件发送成功"
+   - "下单成功" / "支付成功" / "提交成功" → answer with the confirmation message
+   - Search results showing the requested information → answer with the result
+   - Do NOT keep browsing, clicking, or scrolling after the task is complete.
+   - Include the success result in the "value" field.
+5. If genuinely stuck after trying different approaches, use "fail" and explain why.
 6. The "element_id" field must be a STRING matching the number on the screenshot (e.g., "3" not 3).
 7. Action names must be lowercase: click, type, select, scroll, goto, press, answer, fail.
 8. Output ONLY the JSON object — no markdown fences, no extra text.
@@ -93,6 +104,7 @@ Do NOT click any login buttons. Do NOT try to fill in credentials. Do NOT attemp
 {"plan": "搜索中山大学南校园的位置", "thought": "需要输入查询词", "action": "type", "element_id": "3", "value": "中山大学广州校区南校园在哪里"}
 {"plan": "填写收件人地址后发送邮件", "thought": "需要先点击收件人输入框", "action": "click", "element_id": "5"}
 {"plan": "关闭错误提示后修正收件人格式", "thought": "弹窗提示格式错误，先关闭", "action": "click", "element_id": "12"}
+{"plan": "发送端午祝福邮件", "thought": "页面显示发送成功，任务完成", "action": "answer", "value": "邮件已成功发送"}
 
 ## WRONG examples (NEVER do this)
 
@@ -302,9 +314,9 @@ Respond with a JSON object ONLY (no markdown fences, no extra text):
 
 ## Rules
 
-1. If the page clearly changed in the expected way → effect_achieved: true
-2. If the page is IDENTICAL or the change is irrelevant → effect_achieved: false
-3. If the page shows an error, blank screen, or stuck loading → effect_achieved: false
+1. !! CRITICAL: If BEFORE and AFTER screenshots are IDENTICAL (same layout, same text, same elements) → the action had NO EFFECT.  MUST set effect_achieved: false.  Do NOT rationalize it as "the click registered" or "the scroll was smooth" — if you can't see a visible difference, the action FAILED.
+2. If the page changed in the expected way (new content, navigation, modal opened, typed text appeared) → effect_achieved: true.
+3. If the page shows an error, blank screen, or stuck loading → effect_achieved: false.
 4. When effect_achieved is false, think about whether the action caused a WRONG state:
    - Navigated to wrong page → rollback_action: goto back to the original URL
    - Opened an unwanted modal → rollback_action: press Escape

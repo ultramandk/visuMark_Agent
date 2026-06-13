@@ -98,6 +98,39 @@ def is_blank_screenshot(
         return False
 
 
+def are_screenshots_identical(
+    img1: bytes,
+    img2: bytes,
+    diff_pct: float = 0.005,
+) -> bool:
+    """Check if two screenshots are effectively identical.
+
+    Uses PIL's ImageChops.difference for full-image comparison,
+    then counts how many pixels differ.  If fewer than diff_pct
+    (0.5% by default) of pixels changed, the images are identical.
+
+    Much more reliable than sampling — catches small changes like
+    typed text or a button color shift.
+    """
+    try:
+        from PIL import ImageChops
+
+        im1 = Image.open(BytesIO(img1)).convert("L")
+        im2 = Image.open(BytesIO(img2)).convert("L")
+        if im1.size != im2.size:
+            return False
+
+        diff = ImageChops.difference(im1, im2)
+        # Count non-zero pixels in the difference image
+        hist = diff.histogram()
+        zero_pixels = hist[0] if hist else 0
+        total = im1.size[0] * im1.size[1]
+        changed = total - zero_pixels
+        return changed / total < diff_pct
+    except Exception:
+        return False
+
+
 def highlight_element(
     image_bytes: bytes,
     bbox: tuple[float, float, float, float],
