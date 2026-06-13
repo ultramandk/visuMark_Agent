@@ -8,7 +8,7 @@ Subcommands:
 
 Usage:
     python scripts/cli.py run --task "搜索航班" --url "https://google.com/travel/flights"
-    python scripts/cli.py evaluate --dataset mind2web --split test_cross_task --num 10
+    python scripts/cli.py evaluate --split test_cross_task --num 10
     python scripts/cli.py serve --port 8000
 """
 
@@ -123,37 +123,37 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 # ============================================================================
-# evaluate — Mind2Web benchmark
+# evaluate — Mind2Web benchmark (offline HTML snapshots + SoM + VLM)
 # ============================================================================
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
-    """Run Mind2Web evaluation."""
+    """Run Mind2Web evaluation using offline HTML snapshots.
+
+    For each task:
+      1. For each step, load cleaned_html into an OfflineEnvironment
+      2. Render + screenshot + SoM annotation
+      3. VLM predicts: which SoM number to click + what operation
+      4. Compare prediction vs ground truth (pos_candidates + operation)
+      5. Compute: Element Acc / Operation F1 / Step SR / Task SR
+    """
     config = _setup(args)
 
     from visumark.dataset.mind2web import Mind2WebDataset
     from visumark.environment.offline_env import OfflineEnvironment
-    from visumark.perception.base import PerceptorFactory
+    from visumark.perception.som_perceptor import SoMPerceptor
     from visumark.reasoning.factory import ReasonerFactory
-    from visumark.core.agent import Agent, StepCallbacks
     from visumark.evaluation.comparator import Mind2WebComparator
     from visumark.evaluation.metrics import MetricsCalculator
     from visumark.evaluation.reporter import format_table, save_results
-    from visumark.core.types import StepRecord
-    from visumark.perception.dom_bridge import DOMBridge
-    from visumark.action.parser import ActionParser
 
     # Load dataset
-    data_dir = args.data_dir or config.get("data", {}).get("mind2web_dir", "./data/mind2web")
+    data_dir = args.data_dir or "./test"
     dataset = Mind2WebDataset(data_dir=data_dir, split=args.split, max_tasks=args.num)
-    print(f"Loaded {len(dataset)} tasks from Mind2Web/{args.split}")
+    print(f"Loaded {len(dataset)} tasks from {args.split}")
+    print(f"  Stats: {dataset.stats}")
 
-    # Setup components
-    agent_cfg = config["agent"]
-    env_cfg = config["environment"]
-    perc_cfg = config.get("perception", {})
+    # Setup shared components
     reas_cfg = config["reasoning"]
-    eval_cfg = config.get("evaluation", {})
-
     provider = args.provider or reas_cfg.get("provider", "qwen")
     model = args.model or reas_cfg.get("model")
     api_key = args.api_key or reas_cfg.get("api_key")
@@ -164,74 +164,160 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         model=model,
         api_key=api_key,
         base_url=base_url,
-        temperature=reas_cfg.get("temperature", 0.0),
-        max_tokens=reas_cfg.get("max_tokens", 4096),
-        timeout=reas_cfg.get("timeout", 60),
+        temperature=0.0,
+        max_tokens=4096,
+        timeout=reas_cfg.get("timeout", 120),
         max_retries=reas_cfg.get("max_retries", 3),
     )
 
     comparator = Mind2WebComparator()
     calculator = MetricsCalculator()
 
-    class EvalCallback(StepCallbacks):
-        """Step callback that compares predictions against Mind2Web ground truth."""
-        def __init__(self, task, comparator, calculator):
-            super().__init__()
-            self.task = task
-            self.comparator = comparator
-            self.calculator = calculator
-            self._step_idx = 0
-            self._parser = ActionParser()
+    # Run evaluation asynchronously
+    asyncio.run(_evaluate_all(
+        dataset, config, reasoner, comparator, calculator, args.verbose
+    ))
 
-        async def on_step(self, record: StepRecord, bridge: DOMBridge) -> None:
-            if not self.task.actions_gt or self._step_idx >= len(self.task.actions_gt):
-                return
-            gt = self.task.actions_gt[self._step_idx]
-            self._step_idx += 1
-            if record.action is None:
-                return
-            cmp = self.comparator.compare_step(
-                predicted_action=record.action,
-                gt_action=gt,
-                bridge=bridge,
-                step=record.step,
-            )
-            record.element_correct = cmp.element_correct
-            record.operation_correct = cmp.operation_correct
-            self.calculator.record_step(self.task.task_id, cmp)
-
-    async def _evaluate():
-        for i, task in enumerate(dataset):
-            print(f"\n[{i+1}/{len(dataset)}] {task.description[:80]}...")
-
-            env = OfflineEnvironment(
-                viewport=(env_cfg["viewport_width"], env_cfg["viewport_height"]),
-            )
-            perceptor = PerceptorFactory.create(agent_cfg["mode"], perc_cfg)
-
-            agent = Agent(
-                perceptor=perceptor,
-                reasoner=reasoner,
-                env=env,
-                max_steps=agent_cfg.get("max_steps", 30),
-                screenshot_dir=Path(args.screenshot_dir or config.get("data", {}).get("screenshot_dir", "./data/screenshots")) / f"task_{i:03d}",
-            )
-
-            # Attach evaluation callback
-            eval_cb = EvalCallback(task, comparator, calculator)
-            await agent.run(task, callbacks=eval_cb)
-
-        # Compute & report
-        metrics = calculator.compute(args.split)
-        print("\n" + format_table(metrics))
-
-        output_dir = eval_cfg.get("output_dir", "./data/results")
-        path = save_results(metrics, output_dir)
-        print(f"\nResults saved to: {path}")
-
-    asyncio.run(_evaluate())
+    # Print results
+    metrics = calculator.compute(args.split)
+    print("\n" + format_table(metrics))
+    output_dir = config.get("evaluation", {}).get("output_dir", "./data/results")
+    path = save_results(metrics, output_dir)
+    print(f"\nResults saved to: {path}")
 
 
+async def _evaluate_all(
+    dataset, config, reasoner, comparator, calculator, verbose: bool
+) -> None:
+    """Run evaluation on all tasks in the dataset.
+
+    For each task, iterates through its action steps:
+    - Load cleaned_html → screenshot → SoM → VLM → compare with GT
+    """
+    from visumark.environment.offline_env import OfflineEnvironment
+    from visumark.perception.som_perceptor import SoMPerceptor
+    from visumark.environment.dom_utils import parse_accessibility_tree
+    from loguru import logger
+
+    perc_cfg = config.get("perception", {}).get("som", {})
+
+    for task_idx, task in enumerate(dataset):
+        task_desc = task.description[:80]
+        print(f"\n[{task_idx + 1}/{len(dataset)}] {task_desc}...")
+        logger.info(f"Evaluating task {task.task_id}: {task_desc}")
+
+        # Fresh environment per task
+        env = OfflineEnvironment(viewport=(1280, 720))
+        await env.start()
+        perceptor = SoMPerceptor({
+            "max_elements": 600,
+            "font_size": 11,
+            "use_accessibility_tree": True,
+            "min_element_size": 4,
+            "clip_to_viewport": False,  # Offline: capture ALL elements in full-page snapshot
+        })
+
+        try:
+            for step_idx, gt_action in enumerate(task.actions_gt):
+                cleaned_html = gt_action.get("cleaned_html", "")
+                if not cleaned_html:
+                    logger.warning(f"  Step {step_idx + 1}: no cleaned_html, skipping")
+                    continue
+
+                # 1. Load HTML snapshot
+                await env.load_html(cleaned_html)
+
+                # 2. SoM perception (screenshot + element extraction + annotation)
+                perception, bridge = await perceptor.perceive(env)
+
+                # 3. VLM reasoning with evaluation-specific prompt
+                from visumark.core.types import ReasonerOutput
+                from visumark.action.parser import ActionParser
+                from visumark.reasoning.prompts.som_prompts import EVAL_SYSTEM_PROMPT
+                import base64 as _base64
+
+                # Build eval prompt: system + user message
+                user_msg = (
+                    f"Task: {task.description}\n\n"
+                    f"Step {step_idx + 1} of {len(task.actions_gt)}.\n"
+                    f"Website: {task.website} ({task.domain}).\n"
+                    f"Look at the marked screenshot. Which numbered element should be interacted with NEXT?\n"
+                    f"Return ONLY the JSON object."
+                )
+
+                content: list[dict] = [{"type": "text", "text": user_msg}]
+                img_bytes = perception.annotated_screenshot or perception.screenshot
+                if img_bytes:
+                    b64 = _base64.b64encode(img_bytes).decode("utf-8")
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"},
+                    })
+
+                messages = [
+                    {"role": "system", "content": EVAL_SYSTEM_PROMPT},
+                    {"role": "user", "content": content},
+                ]
+
+                raw_text = await reasoner._call_api(messages)
+
+                # Parse response
+                parser = ActionParser()
+                import re as _re
+                thought = ""
+                try:
+                    json_match = _re.search(r"\{[\s\S]*\}", raw_text)
+                    if json_match:
+                        obj = __import__("json").loads(json_match.group(0))
+                        thought = obj.get("thought", "")
+                except Exception:
+                    pass
+
+                action = None
+                try:
+                    action = parser.parse(raw_text)
+                except Exception as e:
+                    logger.warning(f"  Parse error: {e}")
+
+                reasoner_output = ReasonerOutput(
+                    raw_text=raw_text,
+                    thought=thought,
+                    action=action,
+                )
+
+                if reasoner_output.action is None:
+                    logger.warning(f"  Step {step_idx + 1}: VLM produced no action")
+                    # Record as failure
+                    from visumark.evaluation.comparator import StepComparison
+                    cmp = StepComparison(
+                        step=step_idx + 1,
+                        element_correct=False,
+                        operation_correct=False,
+                        step_success=False,
+                        predicted_node=None,
+                        details="VLM produced no valid action",
+                    )
+                    calculator.record_step(task.task_id, cmp)
+                    continue
+
+                # 4. Compare prediction vs ground truth
+                cmp = comparator.compare_step(
+                    predicted_action=reasoner_output.action,
+                    gt_action=gt_action,
+                    bridge=bridge,
+                    step=step_idx + 1,
+                )
+                calculator.record_step(task.task_id, cmp)
+
+                status = "✓" if cmp.step_success else "✗"
+                logger.info(
+                    f"  Step {step_idx + 1}: {status} {cmp.details}"
+                )
+
+        except Exception as exc:
+            logger.error(f"  Task {task.task_id} failed: {exc}")
+        finally:
+            await env.stop()
 
 
 # ============================================================================
@@ -286,10 +372,9 @@ def main():
 
     # ---- evaluate ----
     p_eval = sub.add_parser("evaluate", help="Run Mind2Web benchmark evaluation")
-    p_eval.add_argument("--dataset", choices=["mind2web"], default="mind2web")
-    p_eval.add_argument("--data-dir", default=None, help="Mind2Web data directory")
+    p_eval.add_argument("--data-dir", default="./test", help="Mind2Web data directory")
     p_eval.add_argument("--split", default="test_cross_task",
-                        choices=["test_cross_task", "test_cross_website", "test_cross_domain", "train"])
+                        choices=["test_cross_task", "test_cross_website", "test_cross_domain"])
     p_eval.add_argument("--num", type=int, default=None, help="Max tasks to evaluate")
     p_eval.add_argument("--config", "-c", default="config/config.yaml")
     p_eval.add_argument("--provider", default=None,
@@ -298,8 +383,6 @@ def main():
     p_eval.add_argument("--model", "-m", default=None)
     p_eval.add_argument("--api-key", default=None)
     p_eval.add_argument("--base-url", default=None)
-    p_eval.add_argument("--screenshot-dir", default=None)
-    p_eval.add_argument("--log-file", default=None)
     p_eval.add_argument("--verbose", "-v", action="store_true")
     p_eval.set_defaults(func=cmd_evaluate)
 

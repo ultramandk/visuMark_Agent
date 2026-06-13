@@ -44,11 +44,13 @@ class SoMPerceptor(BasePerceptor):
         self.max_elements = config.get("max_elements", 50)
         self.use_ats = config.get("use_accessibility_tree", True)
         self.min_element_size = config.get("min_element_size", 4)
+        self.clip_to_viewport = config.get("clip_to_viewport", True)
 
         self.marker = marker_factory(config)
         self.extractor = ElementExtractor(
             max_elements=self.max_elements,
             min_element_size=self.min_element_size,
+            clip_to_viewport=self.clip_to_viewport,
         )
 
     async def perceive(
@@ -100,14 +102,17 @@ class SoMPerceptor(BasePerceptor):
                 f"Page appears empty ({len(elements)} elements), "
                 f"waiting & re-taking screenshot..."
             )
-            if hasattr(env, "wait_for_page_ready"):
-                await env.wait_for_page_ready(settle_ms=3000)
+            # Check if browser is still alive before retrying
+            if hasattr(env, "is_alive") and not await env.is_alive():
+                logger.warning("Browser dead, skipping retry")
             else:
-                await page.wait_for_timeout(3000)
-
-            screenshot = await env.screenshot()
-            elements = await self.extractor.extract(page, ats_nodes)
-            logger.debug(f"Retry: extracted {len(elements)} elements, screenshot retaken")
+                try:
+                    await page.wait_for_timeout(2000)
+                    screenshot = await env.screenshot()
+                    elements = await self.extractor.extract(page, ats_nodes)
+                    logger.debug(f"Retry: extracted {len(elements)} elements")
+                except Exception as exc:
+                    logger.warning(f"Retry failed (browser may have crashed): {exc}")
 
         # 4. Draw SoM annotation on screenshot
         vp = env.get_viewport()

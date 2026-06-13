@@ -34,9 +34,11 @@ class ElementExtractor:
     6. Write data-som-id into the DOM — all atomically
     """
 
-    def __init__(self, max_elements: int = 200, min_element_size: int = 4):
+    def __init__(self, max_elements: int = 200, min_element_size: int = 4,
+                 clip_to_viewport: bool = True):
         self.max_elements = max_elements
         self.min_element_size = min_element_size
+        self.clip_to_viewport = clip_to_viewport
 
     async def extract(
         self,
@@ -64,7 +66,8 @@ class ElementExtractor:
                     }
 
         # ── Scan every frame (main + iframes) ──
-        js_code = _build_extraction_js(viewport, ats_map, self.max_elements, self.min_element_size)
+        js_code = _build_extraction_js(viewport, ats_map, self.max_elements,
+                                       self.min_element_size, self.clip_to_viewport)
         all_raw: list[dict] = []
 
         for frame in page.frames:
@@ -127,6 +130,7 @@ def _build_extraction_js(
     ats_map: dict,
     max_elements: int,
     min_size: int,
+    clip_to_viewport: bool = True,
 ) -> str:
     """Build the JavaScript that runs inside the page atomically.
 
@@ -148,6 +152,7 @@ def _build_extraction_js(
     const INTERACTIVE_ROLES = new Set({interactive_roles_json});
     const ATS_MAP = {ats_json};
     const SELECTOR = "{escaped_selector}";
+    const CLIP = {str(clip_to_viewport).lower()};
     const VW = {viewport["width"]};
     const VH = {viewport["height"]};
 
@@ -157,7 +162,7 @@ def _build_extraction_js(
         'aria-checked', 'aria-selected', 'aria-describedby',
         'role', 'value', 'title', 'alt', 'tabindex',
         'disabled', 'checked', 'readonly', 'required',
-        'data-backend-node-id', 'data-id', 'data-testid',
+        'backend_node_id', 'data-backend-node-id', 'data-id', 'data-testid',
     ];
 
     function getText(el) {{
@@ -182,6 +187,7 @@ def _build_extraction_js(
     function buildSelector(tag, attrs) {{
         if (attrs['id']) return tag + '#' + CSS.escape(attrs['id']);
         if (attrs['data-testid']) return '[data-testid="' + CSS.escape(attrs['data-testid']) + '"]';
+        if (attrs['backend_node_id']) return '[backend_node_id="' + CSS.escape(attrs['backend_node_id']) + '"]';
         if (attrs['data-backend-node-id']) return '[data-backend-node-id="' + CSS.escape(attrs['data-backend-node-id']) + '"]';
         if (attrs['class']) {{
             const cls = attrs['class'].trim().split(/\\s+/)[0];
@@ -288,9 +294,11 @@ def _build_extraction_js(
             continue;
         }}
 
-        // Off-screen check
-        if (rect.bottom < -500 || rect.top > VH + 500) continue;
-        if (rect.right < -500 || rect.left > VW + 500) continue;
+        // Off-screen check (skip for offline snapshots where full page is rendered)
+        if (CLIP) {{
+            if (rect.bottom < -500 || rect.top > VH + 500) continue;
+            if (rect.right < -500 || rect.left > VW + 500) continue;
+        }}
 
         // Attributes
         const attrs = {{}};
@@ -300,7 +308,7 @@ def _build_extraction_js(
         }}
 
         const text = getText(el);
-        const backendId = attrs['data-backend-node-id'] || null;
+        const backendId = attrs['backend_node_id'] || attrs['backend_node_id'] || attrs['data-backend-node-id'] || null;
 
         // ATS fusion
         if (ATS_MAP && backendId && ATS_MAP[backendId]) {{
@@ -348,7 +356,9 @@ def _build_extraction_js(
             const rect = el.getBoundingClientRect();
             const area = rect.width * rect.height;
             if (area < 1 || area > 500000) continue;
-            if (rect.bottom < -500 || rect.top > VH + 500) continue;
+            if (CLIP) {{
+                if (rect.bottom < -500 || rect.top > VH + 500) continue;
+            }}
             if (rect.right < -500 || rect.left > VW + 500) continue;
 
             const text = getText(el);
@@ -359,7 +369,7 @@ def _build_extraction_js(
                 const v = el.getAttribute(k);
                 if (v !== null && v !== '') attrs[k] = v;
             }}
-            const backendId = attrs['data-backend-node-id'] || null;
+            const backendId = attrs['backend_node_id'] || attrs['data-backend-node-id'] || null;
             const selector = buildSelector(tag, attrs);
 
             candidates.push({{
@@ -445,7 +455,7 @@ def _build_extraction_js(
                 }}
 
                 const text = getText(el);
-                const backendId = attrs['data-backend-node-id'] || null;
+                const backendId = attrs['backend_node_id'] || attrs['data-backend-node-id'] || null;
 
                 // ATS fusion
                 if (ATS_MAP && backendId && ATS_MAP[backendId]) {{

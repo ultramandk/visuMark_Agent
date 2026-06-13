@@ -193,8 +193,8 @@ class LiveEnvironment(BaseEnvironment):
     async def wait_for_page_ready(
         self,
         settle_ms: int = 2000,
-        min_body_text: int = 50,
-        max_polls: int = 20,
+        min_body_text: int = 30,
+        max_polls: int = 10,
     ) -> None:
         """Wait for the page to actually finish rendering before screenshot.
 
@@ -290,7 +290,7 @@ class LiveEnvironment(BaseEnvironment):
                 iframe_count = result.get("iframes", 0)
                 iframe_ready = result.get("iframesReady", 0)
 
-                if text_len >= min_body_text and elem_count >= 3 and not has_spinner:
+                if text_len >= min_body_text and elem_count >= 1 and not has_spinner:
                     iframe_info = f", {iframe_ready}/{iframe_count} iframes ready" if iframe_count else ""
                     logger.debug(f"Page ready: {text_len} chars, {elem_count} elements{iframe_info}")
                     break
@@ -298,8 +298,8 @@ class LiveEnvironment(BaseEnvironment):
                 reason = ""
                 if text_len < min_body_text:
                     reason = f"text={text_len}/{min_body_text}"
-                elif elem_count < 3:
-                    reason = f"elems={elem_count}/3"
+                elif elem_count < 1:
+                    reason = f"elems={elem_count}/1"
                 elif has_spinner:
                     reason = "spinner present"
                 logger.debug(f"Waiting for page... ({reason}, {iframe_ready}/{iframe_count} iframes, poll {i + 1}/{max_polls})")

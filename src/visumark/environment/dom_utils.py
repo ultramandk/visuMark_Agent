@@ -18,7 +18,11 @@ def generate_css_selector(tag: str, attributes: dict) -> str:
     if "id" in attributes and attributes["id"]:
         return f"{tag}#{_escape_css_string(attributes['id'])}"
 
-    # 2. backend_node_id (Mind2Web)
+    # 2. backend_node_id (Mind2Web — direct attribute name)
+    if "backend_node_id" in attributes and attributes["backend_node_id"]:
+        bid = attributes["backend_node_id"]
+        return f"[backend_node_id='{_escape_css_string(bid)}']"
+    # 3. data-backend-node-id (Mind2Web alternative)
     if "data-backend-node-id" in attributes and attributes["data-backend-node-id"]:
         bid = attributes["data-backend-node-id"]
         return f"[data-backend-node-id='{_escape_css_string(bid)}']"

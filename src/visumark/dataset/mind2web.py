@@ -3,15 +3,19 @@
 Loads Mind2Web JSON task files and converts them into unified TaskInstance objects.
 
 Data source: https://huggingface.co/datasets/osunlp/Mind2Web
-Expected directory structure:
-    data/mind2web/
-    ├── train/           # 1,009 training tasks
-    ├── test_task/       # 252 Cross-Task tasks
-    ├── test_website/    # 177 Cross-Website tasks
-    └── test_domain/     # 912 Cross-Domain tasks
+
+Each JSON file contains a LIST of tasks. Each task:
+    - confirmed_task (str): high-level task description
+    - actions (list[dict]): ordered action sequence
+      - cleaned_html (str): pruned HTML snapshot before this action
+      - raw_html (str): full HTML
+      - operation (dict): {op: CLICK|TYPE|SELECT, value: str}
+      - pos_candidates (list[dict]): ground-truth elements with backend_node_id
+      - neg_candidates (list[dict]): distractor elements
 """
 
 import json
+import re
 from pathlib import Path
 
 from loguru import logger
@@ -22,15 +26,13 @@ from visumark.dataset.base import BaseDataset, TaskInstance
 class Mind2WebDataset(BaseDataset):
     """Mind2Web dataset — 2,350 tasks from 137 real-world websites.
 
-    Supports the 4 standard splits:
-        - train
-        - test_cross_task
-        - test_cross_website
-        - test_cross_domain
+    Supports the standard splits:
+        - test_cross_task (252 tasks)
+        - test_cross_website (177 tasks)
+        - test_cross_domain (912 tasks)
     """
 
     SPLIT_MAP = {
-        "train": "train",
         "test_cross_task": "test_task",
         "test_cross_website": "test_website",
         "test_cross_domain": "test_domain",
@@ -38,7 +40,7 @@ class Mind2WebDataset(BaseDataset):
 
     def __init__(
         self,
-        data_dir: str | Path = "./data/mind2web",
+        data_dir: str | Path = "./test",
         split: str = "test_cross_task",
         max_tasks: int | None = None,
     ):
@@ -52,7 +54,7 @@ class Mind2WebDataset(BaseDataset):
     # ------------------------------------------------------------------
 
     def _load(self, split: str) -> list[TaskInstance]:
-        """Load JSON files for the given split."""
+        """Load all JSON files for a split. Each file contains a list of tasks."""
         dir_name = self.SPLIT_MAP.get(split)
         if dir_name is None:
             raise ValueError(
@@ -63,7 +65,7 @@ class Mind2WebDataset(BaseDataset):
         if not split_dir.exists():
             raise FileNotFoundError(
                 f"Mind2Web split directory not found: {split_dir}\n"
-                f"Download the dataset from: https://huggingface.co/datasets/osunlp/Mind2Web"
+                f"Expected structure: {self.data_dir}/{{test_task,test_website,test_domain}}/"
             )
 
         json_files = sorted(split_dir.glob("*.json"))
@@ -74,8 +76,16 @@ class Mind2WebDataset(BaseDataset):
         for fpath in json_files:
             try:
                 data = json.loads(fpath.read_text(encoding="utf-8"))
-                task = self._parse_instance(data)
-                tasks.append(task)
+                # Each file contains a LIST of task dicts
+                if isinstance(data, list):
+                    for task_dict in data:
+                        task = self._parse_instance(task_dict)
+                        tasks.append(task)
+                        if self.max_tasks and len(tasks) >= self.max_tasks:
+                            break
+                elif isinstance(data, dict):
+                    task = self._parse_instance(data)
+                    tasks.append(task)
             except Exception as e:
                 logger.warning(f"Failed to load {fpath.name}: {e}")
 
@@ -83,35 +93,17 @@ class Mind2WebDataset(BaseDataset):
                 break
 
         logger.info(
-            f"Loaded {len(tasks)} tasks from Mind2Web/{split}"
+            f"Loaded {len(tasks)} tasks from {split}"
             + (f" (limited to {self.max_tasks})" if self.max_tasks else "")
         )
         return tasks
 
     def _parse_instance(self, data: dict) -> TaskInstance:
-        """Parse a single Mind2Web JSON instance into a TaskInstance."""
-        # Extract start URL from annotations or metadata
-        start_url = "about:blank"
-        if "actions" in data and len(data["actions"]) > 0:
-            # Try to get URL from the first action's raw HTML or metadata
-            first_action = data["actions"][0]
-            raw_html = first_action.get("raw_html", "")
-            if raw_html:
-                # Attempt to extract URL from HTML (heuristic)
-                import re
-                url_match = re.search(
-                    r'(?:https?://)?(?:www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}',
-                    raw_html
-                )
-                if url_match:
-                    start_url = url_match.group(0)
-                    if not start_url.startswith("http"):
-                        start_url = "https://" + start_url
-
+        """Parse a single Mind2Web JSON task dict into a TaskInstance."""
         return TaskInstance(
             task_id=data.get("annotation_id", ""),
             description=data.get("confirmed_task", ""),
-            start_url=start_url,
+            start_url="about:blank",  # Offline eval: load HTML from cleaned_html
             domain=data.get("domain", ""),
             website=data.get("website", ""),
             actions_gt=data.get("actions", []),
