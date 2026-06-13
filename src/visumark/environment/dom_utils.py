@@ -119,6 +119,7 @@ INTERACTIVE_SELECTOR = (
     "[role='slider'], [role='option'], [role='textbox'], [role='searchbox'], "
     "[onclick], [tabindex], "
     "[aria-label], "            # Icon buttons, search buttons, etc.
+    "[data-a11y], "             # QQ Mail custom accessibility (e.g. data-a11y="button")
     "[data-backend-node-id]"    # Mind2Web marker
 )
 

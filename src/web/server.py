@@ -342,6 +342,8 @@ async def ws_agent(ws: WebSocket):
                     agent.resume()
             except WebSocketDisconnect:
                 ws_disconnected.set()
+                if agent_task and not agent_task.done():
+                    agent_task.cancel()
                 break
             except Exception:
                 pass
