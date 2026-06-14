@@ -15,6 +15,9 @@ def format_table(metrics: AggregateMetrics) -> str:
 
     Returns a multi-line string suitable for console output.
     """
+    # Count N/A steps
+    total_na = sum(t.num_element_na for t in metrics.task_metrics)
+
     lines = [
         "=" * 70,
         f"EVALUATION RESULTS — {metrics.split}",
@@ -26,8 +29,11 @@ def format_table(metrics: AggregateMetrics) -> str:
         f"  Operation F1:       {metrics.operation_f1:.1%}",
         f"  Step Success Rate:  {metrics.step_success_rate:.1%}",
         f"  Task Success Rate:  {metrics.task_success_rate:.1%}",
-        "=" * 70,
     ]
+    if total_na > 0:
+        lines.append(f"")
+        lines.append(f"  Steps N/A (no GT):  {total_na}  (excluded from Element Acc / Step SR)")
+    lines.append("=" * 70)
 
     # Per-task breakdown (top 10 + bottom 10 for diagnosis)
     tasks = sorted(metrics.task_metrics, key=lambda t: t.step_success_rate)
@@ -92,6 +98,8 @@ def save_results(metrics: AggregateMetrics, output_dir: str | Path) -> Path:
                 "operation_f1": round(t.operation_f1, 4),
                 "step_success_rate": round(t.step_success_rate, 4),
                 "task_success": t.task_success,
+                "num_element_na": t.num_element_na,
+                "num_step_na": t.num_step_na,
             }
             for t in metrics.task_metrics
         ],

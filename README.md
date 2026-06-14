@@ -130,3 +130,123 @@ python scripts/evaluate.py --tasks data/tasks_example.json   # 批量评测
 ## License
 
 MIT
+
+---
+
+
+
+
+
+### 项目结构
+
+```
+├── config/config.yaml          # 主配置（provider, model, base_url 等）
+├── src/visumark/
+│   ├── core/        # Agent 核心循环 + 类型定义
+│   ├── reasoning/   # VLM/LLM 推理（providers/, prompts/, factory.py）
+│   ├── perception/  # SoM 视觉感知 + HTML 文本感知
+│   ├── environment/ # Playwright 浏览器（live/offline）
+│   ├── action/      # 动作解析 + 执行
+│   └── evaluation/  # Mind2Web 评测（comparator, metrics, reporter）
+├── scripts/
+│   ├── cli.py       # 统一 CLI 入口（run / evaluate / serve）
+│   ├── run_agent.py # 旧版 Agent 入口
+│   └── run_web.py   # 旧版 Web 入口
+├── data/            # screenshots/, results/
+└── test/            # Mind2Web 评测数据集
+```
+
+### 统一 CLI
+
+```bash
+python scripts/cli.py --help
+# 子命令: run | evaluate | serve
+```
+
+### 1. Web UI 服务
+
+```bash
+# 如果 SSH 隧道占用了 8000 端口，需换端口启动
+python scripts/cli.py serve --port 9000
+# 浏览器打开 http://localhost:9000
+```
+
+### 2. Live Agent
+
+```bash
+python scripts/cli.py run -t "搜索航班" -u "https://www.bing.com"
+python scripts/cli.py run -t "搜索航班" -u "https://www.bing.com" --show-browser
+```
+
+### 3. 评测
+
+#### HTML 文本模式
+
+```bash
+# 纯文本候选列表
+python scripts/cli.py evaluate --split test_cross_task --num 10 --mode html
+
+# HTML + 截图
+python scripts/cli.py evaluate --split test_cross_task --num 10 --mode html --html-screenshot
+```
+
+#### SoM 视觉模式
+
+```bash
+python scripts/cli.py evaluate --split test_cross_task --num 10 --mode som
+```
+
+#### 指定供应商/模型
+
+```bash
+# 本地 vLLM 模型(不能用)
+python scripts/cli.py evaluate --split test_cross_task --num 10 --mode html \
+    --provider local --model /root/autodl-tmp/Qwen3-VL-8B-Instruc \
+    --base-url http://127.0.0.1:8000/v1 --api-key not-needed
+
+# Qwen API
+python scripts/cli.py evaluate --split test_cross_task --num 10 --mode html \
+    --provider qwen --model qwen3-vl-8b-instruct \
+    --api-key <DASHSCOPE_API_KEY>
+
+# OpenAI API
+python scripts/cli.py evaluate --split test_cross_task --num 10 --mode html \
+    --provider openai --model gpt-4o --api-key <OPENAI_API_KEY>
+```
+
+#### Split 选项
+
+| --split | 说明 | 任务数 |
+|---------|------|--------|
+| `test_cross_task` | 跨任务 | 252 |
+| `test_cross_website` | 跨网站 | 177 |
+| `test_cross_domain` | 跨领域 | 912 |
+
+### 4. 配置参考
+
+`config/config.yaml` 的 `reasoning` 段：
+
+```yaml
+reasoning:
+  provider: qwen                 # openai | anthropic | qwen | local
+  model: qwen3-vl-8b-instruct   # 模型名或本地路径
+  api_key: "${DASHSCOPE_API_KEY}"  # 支持 ${ENV} 变量
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  temperature: 0.0
+  max_tokens: 2048
+  timeout: 120
+  max_retries: 3
+```
+
+
+### 6. 已完成的功能（上述"待完成"中已实现的部分）
+
+- VLM 多供应商支持（openai / anthropic / qwen / local）
+- 工厂模式 + 前端供应商选择器
+- 步骤间记忆（传最近 3 步历史）
+- 自我纠错 + 失败兜底（JS 点击 → Playwright 点击 → 坐标兜底）
+- iframe 支持（跨 frame 元素发现 + 动作执行）
+- CAPTCHA / 登录页面检测 + 人工介入暂停
+- Post-action 验证（截图对比 + DOM 错误检测）
+- 系统代理兼容（`trust_env=False` 支持 SSH 隧道）
+- Mind2Web 评测（Element Accuracy / Operation F1 / Step SR / Task SR）

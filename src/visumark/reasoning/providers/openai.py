@@ -5,6 +5,7 @@ Also serves as the base for Qwen and Local providers (OpenAI-compatible API).
 """
 
 import base64
+import os
 import time
 from typing import Any
 
@@ -13,6 +14,32 @@ from openai import AsyncOpenAI
 
 from visumark.core.types import Action, Perception, ReasonerOutput, StepRecord, VerificationResult
 from visumark.reasoning.base import BaseReasoner
+
+
+def _build_http_client(timeout: float = 120.0) -> Any:
+    """Build an httpx.AsyncClient with safe proxy settings for local endpoints.
+
+    When using SSH tunnels or local model servers (vLLM/Ollama), connections
+    to 127.0.0.1/localhost must NOT go through the system HTTP proxy.  This
+    factory creates an httpx client that:
+
+    - Disables system proxy trust (trust_env=False) so that HTTP_PROXY /
+      HTTPS_PROXY environment variables and Windows Internet Options proxy
+      settings are ignored.
+    - Still allows users to set an explicit proxy via the `proxy` parameter
+      if they really need one (advanced use).
+    """
+    try:
+        import httpx
+
+        # Build a client that does NOT use system proxy settings.
+        # This is critical for local SSH-tunnel deployments.
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout),
+            trust_env=False,  # Ignore system/env proxy — tunnels handle this
+        )
+    except ImportError:
+        return None
 
 
 class OpenAIReasoner(BaseReasoner):
@@ -40,12 +67,18 @@ class OpenAIReasoner(BaseReasoner):
         self._timeout = timeout
         self._max_retries = max_retries
 
-        self._client = AsyncOpenAI(
+        http_client = _build_http_client(timeout)
+
+        client_kwargs: dict[str, Any] = dict(
             api_key=api_key or "placeholder",
             base_url=base_url,
             timeout=timeout,
             max_retries=0,  # We handle retries ourselves
         )
+        if http_client is not None:
+            client_kwargs["http_client"] = http_client
+
+        self._client = AsyncOpenAI(**client_kwargs)
 
     @property
     def provider_name(self) -> str:

@@ -131,8 +131,8 @@ function toast(message, type) {
 const PROVIDER_DEFAULTS = {
     qwen:    { model: "qwen3-vl-8b-instruct", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
     openai:  { model: "gpt-4o",               baseUrl: "https://api.openai.com/v1" },
-    anthropic:{ model: "claude-sonnet-4-6",   baseUrl: "https://api.anthropic.com" },
-    local:   { model: "qwen3-vl:8b",          baseUrl: "http://localhost:11434/v1" },
+    anthropic:{ model: "claude-sonnet-4-6",    baseUrl: "https://api.anthropic.com" },
+    local:   { model: "/root/autodl-tmp/Qwen3-VL-8B-Instruc",  baseUrl: "http://127.0.0.1:8000/v1" },
 };
 
 function onProviderChange() {
@@ -148,7 +148,7 @@ function loadSettings() {
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
         if (saved) {
             settingProvider.value = saved.provider || "qwen";
-            settingModel.value = saved.model || "qwen3-vl-8b-instruct";
+            settingModel.value = saved.model || "/root/autodl-tmp/GUI";
             settingApiKey.value = saved.apiKey || "";
             settingBaseUrl.value = saved.baseUrl || "";
             settingMaxSteps.value = saved.maxSteps || 30;
@@ -272,7 +272,7 @@ function buildTaskConfig(task, url) {
         task,
         url,
         provider: settingProvider.value || "qwen",
-        model: settingModel.value || PROVIDER_DEFAULTS[settingProvider.value]?.model || "qwen3-vl-8b-instruct",
+        model: settingModel.value || PROVIDER_DEFAULTS[settingProvider.value]?.model || "/root/autodl-tmp/GUI",
         api_key: getApiKey(),
         base_url: settingBaseUrl.value.trim() || null,
         max_steps: parseInt(settingMaxSteps.value, 10) || 30,

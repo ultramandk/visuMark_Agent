@@ -149,12 +149,16 @@ async def ws_agent(ws: WebSocket):
         await ws.close()
         return
 
+    from visumark.utils.config import load_config
+
     task_desc = config.get("task", "")
     url = config.get("url", "https://www.google.com")
-    provider = config.get("provider", "qwen")
-    model = config.get("model", "qwen3-vl-8b-instruct")
-    api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
-    base_url = config.get("base_url") or None
+    # 从 YAML 配置读取默认值，前端可覆盖
+    reas_cfg = load_config().get("reasoning", {})
+    provider = config.get("provider") or reas_cfg.get("provider", "local")
+    model = config.get("model") or reas_cfg.get("model", "")
+    api_key = config.get("api_key") or reas_cfg.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
+    base_url = config.get("base_url") or reas_cfg.get("base_url")
     max_steps = config.get("max_steps", 30)
     headless = config.get("headless", False)
 
@@ -171,9 +175,7 @@ async def ws_agent(ws: WebSocket):
     from visumark.dataset.base import TaskInstance
     from visumark.action.executor import build_target_label
 
-    # Load YAML config for defaults (provider, model, api_key, base_url)
-    from visumark.utils.config import load_config
-    reas_cfg = load_config().get("reasoning", {})
+    # reas_cfg already loaded above
 
     env = LiveEnvironment(headless=headless, viewport=(1280, 720))
     perceptor = SoMPerceptor({
@@ -391,7 +393,7 @@ def main():
     args = parser.parse_args()
 
     uvicorn.run(
-        "server:app",
+        "web.server:app",
         host=args.host,
         port=args.port,
         reload=args.reload,
