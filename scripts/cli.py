@@ -212,7 +212,60 @@ async def _evaluate_all(
 
     perc_cfg = config.get("perception", {}).get("som", {})
 
+    # ── Checkpoint: resume from interrupted runs ──
+    import json as _json
+    checkpoint_path = Path("data/results") / f".checkpoint_{dataset.split}.json"
+    completed_ids: set[str] = set()
+    if checkpoint_path.exists():
+        try:
+            ckpt = _json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            completed_ids = set(ckpt.get("completed", []))
+            # Restore already-recorded steps into calculator
+            for task_id, comparisons in ckpt.get("steps", {}).items():
+                if task_id in completed_ids:
+                    for cmp_dict in comparisons:
+                        from visumark.evaluation.comparator import StepComparison
+                        cmp = StepComparison(
+                            step=cmp_dict["step"],
+                            element_correct=cmp_dict.get("element_correct"),
+                            operation_correct=cmp_dict["operation_correct"],
+                            step_success=cmp_dict.get("step_success"),
+                            token_f1=cmp_dict.get("token_f1", 0.0),
+                            predicted_node=cmp_dict.get("predicted_node"),
+                            details=cmp_dict.get("details", ""),
+                        )
+                        calculator.record_step(task_id, cmp)
+            logger.info(f"Resumed from checkpoint: {len(completed_ids)} tasks already done")
+        except Exception:
+            logger.warning("Failed to load checkpoint, starting fresh")
+
+    def _save_checkpoint():
+        """Save current calculator state to checkpoint file."""
+        ckpt_data = {
+            "completed": sorted(completed_ids),
+            "steps": {
+                tid: [
+                    {
+                        "step": c.step,
+                        "element_correct": c.element_correct,
+                        "operation_correct": c.operation_correct,
+                        "step_success": c.step_success,
+                        "token_f1": c.token_f1,
+                        "predicted_node": c.predicted_node,
+                        "details": c.details,
+                    }
+                    for c in calculator._task_steps.get(tid, [])
+                ]
+                for tid in completed_ids
+            },
+        }
+        checkpoint_path.write_text(_json.dumps(ckpt_data, ensure_ascii=False), encoding="utf-8")
+
     for task_idx, task in enumerate(dataset):
+        # Skip already-completed tasks
+        if task.task_id in completed_ids:
+            continue
+
         task_desc = task.description[:80]
         print(f"\n[{task_idx + 1}/{len(dataset)}] {task_desc}...")
         logger.info(f"Evaluating task {task.task_id}: {task_desc}")
@@ -465,6 +518,9 @@ async def _evaluate_all(
         except Exception as exc:
             logger.error(f"  Task {task.task_id} failed: {exc}")
         finally:
+            # Mark as completed even on failure (don't retry failed tasks)
+            completed_ids.add(task.task_id)
+            _save_checkpoint()
             await env.stop()
 
 
