@@ -175,8 +175,10 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
     # Run evaluation asynchronously
     mode = getattr(args, "mode", "som")
+    html_screenshot = getattr(args, "html_screenshot", False)
     asyncio.run(_evaluate_all(
-        dataset, config, reasoner, comparator, calculator, args.verbose, mode=mode
+        dataset, config, reasoner, comparator, calculator, args.verbose,
+        mode=mode, html_screenshot=html_screenshot,
     ))
 
     # Print results
@@ -190,6 +192,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 async def _evaluate_all(
     dataset, config, reasoner, comparator, calculator, verbose: bool,
     mode: str = "som",
+    html_screenshot: bool = False,
 ) -> None:
     """Run evaluation on all tasks in the dataset.
 
@@ -199,6 +202,8 @@ async def _evaluate_all(
 
     Args:
         mode: "som" (visual) or "html" (text-based).
+        html_screenshot: If True, include a page screenshot alongside the
+            text candidate list in HTML mode (for VLM identity).
     """
     from visumark.environment.offline_env import OfflineEnvironment
     from visumark.perception.som_perceptor import SoMPerceptor
@@ -242,13 +247,14 @@ async def _evaluate_all(
                 await env.load_html(cleaned_html)
 
                 if mode == "html":
-                    # ── HTML text mode: candidate list → LLM ──
+                    # ── HTML text mode: candidate list + screenshot → VLM ──
                     from visumark.core.types import ReasonerOutput
                     from visumark.action.parser import ActionParser
                     from visumark.reasoning.prompts.html_prompts import (
                         HTML_EVAL_SYSTEM_PROMPT,
                         build_html_eval_user_prompt,
                     )
+                    import base64 as _base64
 
                     # Build candidate list from Mind2Web data
                     candidates = (
@@ -259,7 +265,7 @@ async def _evaluate_all(
                         env, candidates=candidates
                     )
 
-                    # Build text-only prompt
+                    # Build text prompt
                     user_msg = build_html_eval_user_prompt(
                         task=task.description,
                         elements=perception.elements,
@@ -269,9 +275,33 @@ async def _evaluate_all(
                         domain=task.domain,
                     )
 
+                    # Build messages: text + optional screenshot
+                    content: list[dict] = [{"type": "text", "text": user_msg}]
+
+                    if html_screenshot:
+                        from io import BytesIO as _BytesIO
+                        from PIL import Image as _Image
+                        screenshot = await env.screenshot()
+                        if screenshot:
+                            img = _Image.open(_BytesIO(screenshot))
+                            if img.height > 2048:
+                                scale = 2048 / img.height
+                                img = img.resize(
+                                    (int(img.width * scale), 2048),
+                                    _Image.LANCZOS,
+                                )
+                                buf = _BytesIO()
+                                img.save(buf, format="JPEG", quality=70)
+                                screenshot = buf.getvalue()
+                            b64 = _base64.b64encode(screenshot).decode("utf-8")
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                            })
+
                     messages = [
                         {"role": "system", "content": HTML_EVAL_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_msg},
+                        {"role": "user", "content": content},
                     ]
 
                     # HTML mode only needs ~150 tokens for JSON response.
@@ -504,6 +534,8 @@ def main():
     p_eval.add_argument("--mode", default="som",
                         choices=["som", "html"],
                         help="Perception mode: som (visual) or html (text-based)")
+    p_eval.add_argument("--html-screenshot", action="store_true",
+                        help="Include page screenshot in HTML mode (default: off)")
     p_eval.add_argument("--verbose", "-v", action="store_true")
     p_eval.set_defaults(func=cmd_evaluate)
 
