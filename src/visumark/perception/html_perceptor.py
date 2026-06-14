@@ -159,20 +159,28 @@ class HTMLPerceptor(BasePerceptor):
         return (0.0, 0.0, 0.0, 0.0)
 
     def _extract_element_text(self, html: str, backend_node_id: str) -> str:
-        """Extract visible text content for an element from cleaned_html.
+        """Extract visible text content for an element from the rendered HTML.
 
         Mind2Web cleaned_html uses <text backend_node_id="N">content</text>
-        nodes to mark visible text.  We find the text node that is a direct
-        child of the element with the given backend_node_id.
+        nodes to mark visible text.  After offline_env._inject_node_ids()
+        processes the HTML, the attribute becomes data-backend-node-id.
+        We search for BOTH forms.
         """
         if not backend_node_id:
             return ""
 
-        # Find the element's opening tag
-        elem_pattern = re.compile(
-            r'<\w+\s[^>]*?\bbackend_node_id\s*=\s*"' + re.escape(backend_node_id) + r'"'
-        )
-        m = elem_pattern.search(html)
+        # Find the element's opening tag in the RENDERED HTML.
+        # After offline_env._inject_node_ids(), the attribute name is
+        # data-backend-node-id (with hyphens), not backend_node_id.
+        escaped_id = re.escape(backend_node_id)
+        m = None
+        for attr_name in ("data-backend-node-id", "backend_node_id"):
+            m = re.search(
+                r'<\w+\s[^>]*?\b' + attr_name + r'\s*=\s*"' + escaped_id + r'"',
+                html,
+            )
+            if m:
+                break
         if not m:
             return ""
 
