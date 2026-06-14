@@ -260,9 +260,10 @@ async def _evaluate_all(
                         new_w = int(iw * scale)
                         new_h = MAX_IMAGE_HEIGHT
                         img = img.resize((new_w, new_h), _Image.LANCZOS)
-                        for elem in perception.elements:
-                            x, y, w, h = elem.bbox
-                            elem.bbox = (x, y * scale, w, h * scale)
+                        # Bbox values are normalized ratios [0,1].
+                        # Proportional resize preserves ratios — no bbox
+                        # adjustment needed.  The SoM marker will multiply
+                        # by the new viewport dimensions.
                         buf = _BytesIO()
                         img.save(buf, format="PNG")
                         perception.screenshot = buf.getvalue()
