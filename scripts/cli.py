@@ -517,6 +517,23 @@ async def _evaluate_all(
 
         except Exception as exc:
             logger.error(f"  Task {task.task_id} failed: {exc}")
+            # If the browser crashed, recreate environment for next task
+            if "Page crashed" in str(exc) or "Target closed" in str(exc):
+                try:
+                    await env.stop()
+                except Exception:
+                    pass
+                env = OfflineEnvironment(viewport=(1280, 720))
+                await env.start()
+                if mode == "html":
+                    from visumark.perception.html_perceptor import HTMLPerceptor
+                    perceptor = HTMLPerceptor({"max_candidates": 80})
+                else:
+                    perceptor = SoMPerceptor({
+                        "max_elements": 600, "font_size": 11,
+                        "use_accessibility_tree": True, "min_element_size": 4,
+                        "clip_to_viewport": False,
+                    })
         finally:
             # Mark as completed even on failure (don't retry failed tasks)
             completed_ids.add(task.task_id)
