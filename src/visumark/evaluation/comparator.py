@@ -17,13 +17,24 @@ from visumark.perception.dom_bridge import DOMBridge
 
 @dataclass
 class StepComparison:
-    """Result of comparing one predicted step against ground truth."""
+    """Result of comparing one predicted step against ground truth.
+
+    element_correct is tri-state:
+        True  — VLM picked an element in pos_candidates
+        False — VLM picked an element NOT in pos_candidates
+        None  — pos_candidates is empty (ground truth missing); N/A for this metric
+
+    token_f1 is the continuous token-level F1 score for the operation value:
+        - CLICK: 1.0 if op type matches, 0.0 otherwise
+        - TYPE/SELECT: actual token F1 (0.0–1.0)
+    """
     step: int
-    element_correct: bool
+    element_correct: bool | None  # tri-state: True / False / None (N/A)
     operation_correct: bool
-    step_success: bool
+    step_success: bool | None  # None when element_correct is None (N/A)
+    token_f1: float = 0.0
     predicted_node: str | None = None
-    acceptable_nodes: set = None  # Use field(default_factory=set) in real code
+    acceptable_nodes: set = None
     details: str = ""
 
     def __post_init__(self):
@@ -73,23 +84,31 @@ class Mind2WebComparator:
             StepComparison with element_correct, operation_correct, step_success.
         """
         # --- Element Accuracy ---
-        predicted_node = bridge.som_id_to_backend_node(predicted_action.element_id)
         acceptable = self._get_acceptable_nodes(gt_action)
-        element_correct = predicted_node in acceptable if predicted_node else False
+
+        if not acceptable:
+            # Ground truth has no pos_candidates — skip Element Accuracy for this step
+            element_correct = None
+            predicted_node = None
+        else:
+            predicted_node = bridge.som_id_to_backend_node(predicted_action.element_id)
+            element_correct = predicted_node in acceptable if predicted_node else False
 
         # --- Operation Correctness ---
         gt_op = gt_action["operation"]["op"]  # "CLICK" | "TYPE" | "SELECT"
         gt_value = gt_action["operation"].get("value")
-        operation_correct = self._check_operation(
-            predicted_action, gt_op, gt_value
-        )
+        token_f1 = self._check_operation(predicted_action, gt_op, gt_value)
+        operation_correct = token_f1 >= 0.5  # Mind2Web paper threshold
 
         # --- Step Success ---
-        step_success = element_correct and operation_correct
+        if element_correct is None:
+            step_success = None   # N/A — can't determine without pos_candidates
+        else:
+            step_success = element_correct and operation_correct
 
         details = self._format_details(
             predicted_action, predicted_node, acceptable,
-            element_correct, operation_correct,
+            element_correct, operation_correct, token_f1,
         )
 
         return StepComparison(
@@ -97,6 +116,7 @@ class Mind2WebComparator:
             element_correct=element_correct,
             operation_correct=operation_correct,
             step_success=step_success,
+            token_f1=token_f1,
             predicted_node=predicted_node,
             acceptable_nodes=acceptable,
             details=details,
@@ -124,25 +144,26 @@ class Mind2WebComparator:
         predicted: Action,
         gt_op: str,
         gt_value: str | None,
-    ) -> bool:
-        """Check if the predicted operation matches ground truth.
+    ) -> float:
+        """Compute token-level F1 for the predicted operation vs ground truth.
 
-        For CLICK: checks that predicted type is CLICK (or HOVER/PRESS which map to CLICK).
-        For TYPE/SELECT: checks operation type match AND value token-F1 == 1.0.
+        Returns a continuous score (0.0–1.0):
+            - CLICK: 1.0 if operation type matches, 0.0 otherwise
+            - TYPE/SELECT: token-level F1 between predicted and GT values
+            - Unknown GT op: 0.0
         """
         pred_op = predicted.action_type.value.upper()
 
         if gt_op == "CLICK":
             # In Mind2Web, HOVER and PRESS_ENTER are mapped to CLICK
-            return pred_op in ("CLICK", "HOVER", "PRESS")
+            return 1.0 if pred_op in ("CLICK", "HOVER", "PRESS") else 0.0
 
         if gt_op in ("TYPE", "SELECT"):
             if pred_op != gt_op:
-                return False
-            # Value must match exactly (token F1 = 1.0)
-            return self._token_f1(predicted.value, gt_value) == 1.0
+                return 0.0
+            return self._token_f1(predicted.value, gt_value)
 
-        return False
+        return 0.0
 
     # ------------------------------------------------------------------
     # Token-level F1 (per Mind2Web paper formula)
@@ -181,15 +202,22 @@ class Mind2WebComparator:
         action: Action,
         predicted_node: str | None,
         acceptable: set[str],
-        element_correct: bool,
+        element_correct: bool | None,
         operation_correct: bool,
+        token_f1: float = 0.0,
     ) -> str:
         """Build a human-readable comparison summary."""
-        ele_mark = "✓" if element_correct else "✗"
+        if element_correct is None:
+            ele_mark = "N/A"
+        elif element_correct:
+            ele_mark = "✓"
+        else:
+            ele_mark = "✗"
+
         op_mark = "✓" if operation_correct else "✗"
 
         return (
             f"Element {ele_mark} (pred={predicted_node or '?'}, "
             f"acceptable={acceptable}), "
-            f"Operation {op_mark} ({action.action_type.value}: {action.value or '-'})"
+            f"Operation {op_mark} F1={token_f1:.2f} ({action.action_type.value}: {action.value or '-'})"
         )

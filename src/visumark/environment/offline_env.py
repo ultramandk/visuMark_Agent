@@ -79,29 +79,48 @@ class OfflineEnvironment(BaseEnvironment):
     def _inject_node_ids(self, html: str) -> str:
         """Inject data-backend-node-id attributes into Mind2Web HTML.
 
-        Mind2Web cleaned_html may have elements with backend_node_id in a
-        data-id attribute or similar. We normalize them to data-backend-node-id.
+        Mind2Web cleaned_html marks elements with backend_node_id directly
+        (e.g. <button backend_node_id="2058">) as well as through data-id
+        and data-node-id proxies.  We normalize all three forms to
+        data-backend-node-id so the INTERACTIVE_SELECTOR CSS selector
+        (which includes [data-backend-node-id]) can find every element
+        that has a Mind2Web node identifier — even <div> elements that
+        have no other interactive markers.
+
+        Without this, plain <div> targets (e.g. calendar day cells) are
+        invisible to the SoM element extractor and the VLM can never
+        select them.
         """
         # Already has our marker — skip
-        if "data-backend-node-id" in html[:2000]:
+        if "data-backend-node-id" in html[:5000]:
             return html
 
-        # Convert common Mind2Web marker formats:
-        #   data-id="node-42"   → data-backend-node-id="node-42"
-        #   data-node-id="..."  → data-backend-node-id="..."
         import re
 
+        # 1. Convert Mind2Web proxy markers:
+        #    data-id="node-42"    → data-backend-node-id="node-42"
+        #    data-node-id="..."   → data-backend-node-id="..."
         html = re.sub(
             r'data-(?:id|node-id)\s*=\s*"([^"]*)"',
             r'data-backend-node-id="\1"',
             html,
         )
+
+        # 2. Convert direct backend_node_id (the most common form).
+        #    The negative lookbehind (?<!data-) prevents matching
+        #    inside an already-existing data-backend-node-id attribute.
+        html = re.sub(
+            r'(?<!data-)backend_node_id\s*=\s*"([^"]*)"',
+            r'data-backend-node-id="\1"',
+            html,
+        )
+
         return html
 
     async def screenshot(self) -> bytes:
         if not self._page:
             raise RuntimeError("Offline environment not started")
-        return await self._page.screenshot(full_page=False, type="jpeg", quality=75)
+        return await self._page.screenshot(full_page=True, type="png")
 
     async def get_page_html(self) -> str:
         if not self._page:

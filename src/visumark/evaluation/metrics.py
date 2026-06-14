@@ -14,10 +14,12 @@ class TaskMetrics:
     """Per-task metrics."""
     task_id: str
     total_steps: int
-    element_accuracy: float        # Fraction of steps with correct element
-    operation_f1: float             # Average operation F1 across steps
-    step_success_rate: float        # Fraction of fully successful steps
-    task_success: bool              # All steps successful
+    element_accuracy: float        # Fraction of evaluable steps with correct element
+    operation_f1: float             # Average operation F1 across all steps
+    step_success_rate: float        # Fraction of evaluable steps that are fully successful
+    task_success: bool              # All evaluable steps successful
+    num_element_na: int = 0         # Steps skipped for Element Acc (pos_candidates empty)
+    num_step_na: int = 0            # Steps skipped for Step SR (pos_candidates empty)
 
 
 @dataclass
@@ -95,7 +97,11 @@ class MetricsCalculator:
     def _compute_task_metrics(
         self, task_id: str, comparisons: list
     ) -> TaskMetrics:
-        """Compute per-task metrics from step comparisons."""
+        """Compute per-task metrics from step comparisons.
+
+        Steps with element_correct=None (pos_candidates empty) are excluded
+        from Element Accuracy and Step Success Rate denominators.
+        """
         total = len(comparisons)
         if total == 0:
             return TaskMetrics(
@@ -107,13 +113,28 @@ class MetricsCalculator:
                 task_success=False,
             )
 
-        element_acc = sum(1 for c in comparisons if c.element_correct) / total
-        op_f1_total = sum(
-            1.0 if c.operation_correct else 0.0 for c in comparisons
+        # Element Accuracy — only count evaluable steps
+        elem_evaluable = [c for c in comparisons if c.element_correct is not None]
+        num_na = total - len(elem_evaluable)
+        element_acc = (
+            sum(1 for c in elem_evaluable if c.element_correct) / len(elem_evaluable)
+            if elem_evaluable else 0.0
         )
-        op_f1 = op_f1_total / total
-        step_sr = sum(1 for c in comparisons if c.step_success) / total
-        task_success = all(c.step_success for c in comparisons)
+
+        # Operation F1 — continuous token F1 average across all steps
+        op_f1 = sum(c.token_f1 for c in comparisons) / total
+
+        # Step Success Rate — only count evaluable steps
+        step_evaluable = [c for c in comparisons if c.step_success is not None]
+        num_step_na = total - len(step_evaluable)
+        step_sr = (
+            sum(1 for c in step_evaluable if c.step_success) / len(step_evaluable)
+            if step_evaluable else 0.0
+        )
+
+        # Task Success: no evaluable step should be a failure
+        # (N/A steps don't block success)
+        task_success = all(c.step_success is not False for c in comparisons)
 
         return TaskMetrics(
             task_id=task_id,
@@ -122,6 +143,8 @@ class MetricsCalculator:
             operation_f1=op_f1,
             step_success_rate=step_sr,
             task_success=task_success,
+            num_element_na=num_na,
+            num_step_na=num_step_na,
         )
 
     def reset(self) -> None:

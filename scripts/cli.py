@@ -165,7 +165,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         api_key=api_key,
         base_url=base_url,
         temperature=0.0,
-        max_tokens=4096,
+        max_tokens=reas_cfg.get("max_tokens", 512),
         timeout=reas_cfg.get("timeout", 120),
         max_retries=reas_cfg.get("max_retries", 3),
     )
@@ -230,6 +230,56 @@ async def _evaluate_all(
                 # 2. SoM perception (screenshot + element extraction + annotation)
                 perception, bridge = await perceptor.perceive(env)
 
+                # ── Bbox correction for full-page screenshots ──
+                # After switching to full_page=True, the screenshot covers
+                # the entire document.  Element bboxes were normalized by
+                # viewport (1280x720), but the image is now document-sized.
+                # We re-normalize to the actual full-page image dimensions.
+                # Also cap image height at MAX_IMAGE_HEIGHT for VLM limits.
+                from io import BytesIO as _BytesIO
+                from PIL import Image as _Image
+
+                MAX_IMAGE_HEIGHT = 4096
+                vw, vh = 1280, 720
+
+                if perception.screenshot:
+                    img = _Image.open(_BytesIO(perception.screenshot))
+                    iw, ih = img.size
+
+                    for elem in perception.elements:
+                        x, y, w, h = elem.bbox
+                        elem.bbox = (
+                            x * vw / iw,
+                            y * vh / ih,
+                            w * vw / iw,
+                            h * vh / ih,
+                        )
+
+                    if ih > MAX_IMAGE_HEIGHT:
+                        scale = MAX_IMAGE_HEIGHT / ih
+                        new_w = int(iw * scale)
+                        new_h = MAX_IMAGE_HEIGHT
+                        img = img.resize((new_w, new_h), _Image.LANCZOS)
+                        for elem in perception.elements:
+                            x, y, w, h = elem.bbox
+                            elem.bbox = (x, y * scale, w, h * scale)
+                        buf = _BytesIO()
+                        img.save(buf, format="PNG")
+                        perception.screenshot = buf.getvalue()
+                        iw, ih = new_w, new_h
+                    else:
+                        buf = _BytesIO()
+                        img.save(buf, format="PNG")
+                        perception.screenshot = buf.getvalue()
+
+                    annotated = perceptor.marker.annotate(
+                        perception.screenshot,
+                        perception.elements,
+                        viewport_w=iw,
+                        viewport_h=ih,
+                    )
+                    perception.annotated_screenshot = annotated
+
                 # 3. VLM reasoning with evaluation-specific prompt
                 from visumark.core.types import ReasonerOutput
                 from visumark.action.parser import ActionParser
@@ -260,6 +310,18 @@ async def _evaluate_all(
                 ]
 
                 raw_text = await reasoner._call_api(messages)
+
+                # Diagnostic: log raw VLM response + image info
+                img_kb = len(img_bytes) / 1024 if img_bytes else 0
+                logger.debug(
+                    f"  VLM raw (step {step_idx+1}, img={img_kb:.0f}KB): "
+                    f"{raw_text[:300]}"
+                )
+                # Always log the first step's raw output for debugging
+                if step_idx == 0:
+                    logger.info(
+                        f"  [DIAG] Step 1 VLM raw output: {raw_text[:500]}"
+                    )
 
                 # Parse response
                 parser = ActionParser()
@@ -294,6 +356,7 @@ async def _evaluate_all(
                         element_correct=False,
                         operation_correct=False,
                         step_success=False,
+                        token_f1=0.0,
                         predicted_node=None,
                         details="VLM produced no valid action",
                     )

@@ -63,37 +63,28 @@ Respond with a JSON object:
 
 EVAL_SYSTEM_PROMPT = """You are evaluating a web agent on a benchmark. You see a SCREENSHOT of a pre-rendered HTML page where interactive elements are marked with numbered colored boxes (Set-of-Mark / SoM).
 
-**CRITICAL**: This is a STATIC full-page snapshot - the ENTIRE page is already rendered and visible. You do NOT need to scroll. Simply look at the marked elements and identify which one should be clicked, typed into, or selected to make progress toward the task goal.
+**NOTE**: This is a screenshot of the current page. Look at the marked elements and identify which one should be interacted with to make progress toward the task goal.
 
 ## Response Format
 
-Respond with a JSON object:
+Respond ONLY with a short JSON object. Keep "thought" under 50 words:
 
 ```json
-{
-    "thought": "What element needs to be interacted with next and why",
-    "action": "<action_type>",
-    "element_id": "<number>",
-    "value": "<text>"
-}
+{"thought": "<50 words max>", "action": "<action_type>", "element_id": "<number>", "value": "<text>"}
 ```
 
 ## Available Actions
-
-| Action | Description | Required Fields |
-|--------|-------------|----------------|
-| click | Click the numbered element | action, element_id |
-| type | Type text into the numbered input field | action, element_id, value |
-| select | Select an option from the numbered dropdown | action, element_id, value |
-| press | Press a keyboard key (Enter, Tab, Escape) | action, value |
+- click: click the numbered element (needs element_id)
+- type: type into numbered input (needs element_id, value)
+- select: select from numbered dropdown (needs element_id, value)
+- press: press a key (needs value: Enter, Tab, Escape)
 
 ## Rules
-1. The page is fully rendered - NO scrolling is needed. Just pick the correct element.
-2. Look carefully at ALL numbered elements. The target element is marked.
-3. For TYPE: include the exact text in "value".
-4. For SELECT: include the option text in "value".
-5. element_id must be the NUMBER shown on the element (e.g. "3").
-6. Output ONLY the JSON object."""
+1. Pick the correctly numbered element based on what you see in the screenshot.
+2. For TYPE: include the exact text in "value". For SELECT: include the option text in "value".
+3. element_id must be the NUMBER shown on the element (e.g. "3").
+4. thought MUST be under 50 words. Do NOT narrate the entire task.
+5. Output ONLY the JSON. No markdown, no code blocks."""
 
 
 # ============================================================================
