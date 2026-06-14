@@ -1,50 +1,106 @@
-"""HTML text-mode prompt templates (MINDACT multi-choice QA format).
+"""HTML text-mode prompt templates for Mind2Web evaluation.
 
-This is the AUXILIARY path — for comparison experiments with the
-text-based approach from the Mind2Web paper.
+The HTML mode follows the original Mind2Web paper's approach: the LLM
+receives a text prompt with a structured candidate element list and selects
+the correct element by number.  No screenshot — pure text reasoning.
+
+Difference from SoM mode: the "numbered element" is a position in the
+candidate list, NOT a visual label on a screenshot.  The DOMBridge maps
+the candidate index to a backend_node_id for comparison.
 """
+
+from visumark.core.types import PageElement
+
+
+# ============================================================================
+# Evaluation system prompt
+# ============================================================================
+
+HTML_EVAL_SYSTEM_PROMPT = """You are evaluating a web agent on a benchmark. You receive a list of numbered interactive elements from a web page, each with its HTML tag, CSS class, ARIA label, bounding box position, and visible text.
+
+Your task: select the ONE element that should be interacted with next to make progress toward the task goal.
+
+## Response Format
+
+Respond ONLY with a short JSON object:
+
+```json
+{"thought": "<brief reasoning>", "element_id": "<number>"}
+```
+
+## Rules
+1. Choose the element number that best matches the task goal.
+2. Base your decision on: element tag, class name, text content, aria label, and position.
+3. element_id must be the NUMBER of the candidate element (e.g. "3").
+4. Output ONLY the JSON. No markdown, no code blocks.
+5. Keep thought under 50 words."""
+
+
+# ============================================================================
+# Live agent system prompt (text mode)
+# ============================================================================
 
 HTML_SYSTEM_PROMPT = """You are a helpful assistant that is great at website design, navigation, and executing tasks for the user."""
 
 
-def build_html_user_prompt(
+# ============================================================================
+# Build user prompt for evaluation
+# ============================================================================
+
+def build_html_eval_user_prompt(
     task: str,
-    cleaned_html: str,
-    candidates: list[dict],
-    history: list[str],
+    elements: list[PageElement],
+    step_idx: int,
+    total_steps: int,
+    website: str = "",
+    domain: str = "",
 ) -> str:
-    """Build a multi-choice QA prompt in the MINDACT format.
+    """Build a compact text prompt for Mind2Web evaluation.
 
-    Args:
-        task: Natural language task description.
-        cleaned_html: Pruned HTML snippet.
-        candidates: List of candidate elements with tags and text.
-        history: Previous action descriptions.
-
-    Returns:
-        Multi-choice QA prompt string.
+    Lists candidate elements with key attributes.  The format is
+    optimized for models with small context windows (e.g. 4096 tokens).
     """
-    # Build choices
-    choices = ["A. None of the above"]
-    letters = "BCDEFGHIJKLMNOPQRSTUVWXYZ"
-    for i, cand in enumerate(candidates[:10]):  # Show max 10 per group
-        letter = letters[i] if i < len(letters) else f"Option{i}"
-        choices.append(
-            f"{letter}. [{cand.get('tag', '?')}] {cand.get('text', '')}"
-        )
+    parts = [
+        f"Task: {task}",
+        f"Step {step_idx + 1}/{total_steps}.",
+    ]
+    if website:
+        parts.append(f"Website: {website} ({domain})")
 
-    history_str = "\n".join(history[-5:]) if history else "None"
+    # Top-level candidates first (more likely to be correct)
+    top_level = [e for e in elements if e.attributes.get("is_top_level")]
+    others = [e for e in elements if not e.attributes.get("is_top_level")]
 
-    return f"""{cleaned_html}
+    parts.append("")
+    parts.append("Select the ONE element to interact with next:")
+    parts.append("")
 
-Based on the HTML webpage above, try to complete the following task:
-Task: {task}
-Previous actions:
-{history_str}
+    for e in top_level:
+        parts.append(_format_candidate(e))
+    if top_level and others:
+        parts.append("---")
+    for e in others:
+        parts.append(_format_candidate(e))
 
-What should be the next action? Please select from the following choices
-(If the correct action is not in the page above, please select A. 'None of the above'):
+    parts.append("")
+    parts.append('Return: {"thought": "...", "element_id": "<number>"}')
+    return "\n".join(parts)
 
-{chr(10).join(choices)}
 
-Answer:"""
+def _format_candidate(e: PageElement) -> str:
+    """Format a single candidate — compact single-line."""
+    attrs = e.attributes
+    tag = e.tag
+    text = e.text[:50].replace("\n", " ") if e.text else ""
+    cls = attrs.get("class", "")[:30]
+    aria = attrs.get("aria_label", "")[:30]
+
+    parts = [f"[{e.id}] <{tag}>"]
+    if text:
+        parts.append(f' "{text}"')
+    if cls:
+        parts.append(f" .{cls}")
+    if aria:
+        parts.append(f' aria="{aria}"')
+
+    return " ".join(parts)

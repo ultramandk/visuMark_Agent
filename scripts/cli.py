@@ -174,8 +174,9 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     calculator = MetricsCalculator()
 
     # Run evaluation asynchronously
+    mode = getattr(args, "mode", "som")
     asyncio.run(_evaluate_all(
-        dataset, config, reasoner, comparator, calculator, args.verbose
+        dataset, config, reasoner, comparator, calculator, args.verbose, mode=mode
     ))
 
     # Print results
@@ -187,12 +188,17 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
 
 async def _evaluate_all(
-    dataset, config, reasoner, comparator, calculator, verbose: bool
+    dataset, config, reasoner, comparator, calculator, verbose: bool,
+    mode: str = "som",
 ) -> None:
     """Run evaluation on all tasks in the dataset.
 
-    For each task, iterates through its action steps:
-    - Load cleaned_html → screenshot → SoM → VLM → compare with GT
+    Two modes:
+        som  — SoM visual: screenshot + bounding-box annotation → VLM
+        html — Text: candidate list with attributes → LLM/VLM (closest to paper)
+
+    Args:
+        mode: "som" (visual) or "html" (text-based).
     """
     from visumark.environment.offline_env import OfflineEnvironment
     from visumark.perception.som_perceptor import SoMPerceptor
@@ -209,13 +215,21 @@ async def _evaluate_all(
         # Fresh environment per task
         env = OfflineEnvironment(viewport=(1280, 720))
         await env.start()
-        perceptor = SoMPerceptor({
-            "max_elements": 600,
-            "font_size": 11,
-            "use_accessibility_tree": True,
-            "min_element_size": 4,
-            "clip_to_viewport": False,  # Offline: capture ALL elements in full-page snapshot
-        })
+
+        # Choose perception mode
+        if mode == "html":
+            from visumark.perception.html_perceptor import HTMLPerceptor
+            perceptor = HTMLPerceptor({
+                "max_candidates": 80,
+            })
+        else:
+            perceptor = SoMPerceptor({
+                "max_elements": 600,
+                "font_size": 11,
+                "use_accessibility_tree": True,
+                "min_element_size": 4,
+                "clip_to_viewport": False,
+            })
 
         try:
             for step_idx, gt_action in enumerate(task.actions_gt):
@@ -227,104 +241,144 @@ async def _evaluate_all(
                 # 1. Load HTML snapshot
                 await env.load_html(cleaned_html)
 
-                # 2. SoM perception (screenshot + element extraction + annotation)
-                perception, bridge = await perceptor.perceive(env)
+                if mode == "html":
+                    # ── HTML text mode: candidate list → LLM ──
+                    from visumark.core.types import ReasonerOutput
+                    from visumark.action.parser import ActionParser
+                    from visumark.reasoning.prompts.html_prompts import (
+                        HTML_EVAL_SYSTEM_PROMPT,
+                        build_html_eval_user_prompt,
+                    )
 
-                # ── Bbox correction for full-page screenshots ──
-                # After switching to full_page=True, the screenshot covers
-                # the entire document.  Element bboxes were normalized by
-                # viewport (1280x720), but the image is now document-sized.
-                # We re-normalize to the actual full-page image dimensions.
-                # Also cap image height at MAX_IMAGE_HEIGHT for VLM limits.
-                from io import BytesIO as _BytesIO
-                from PIL import Image as _Image
+                    # Build candidate list from Mind2Web data
+                    candidates = (
+                        gt_action.get("pos_candidates", []) +
+                        gt_action.get("neg_candidates", [])
+                    )
+                    perception, bridge = await perceptor.perceive(
+                        env, candidates=candidates
+                    )
 
-                MAX_IMAGE_HEIGHT = 4096
-                vw, vh = 1280, 720
+                    # Build text-only prompt
+                    user_msg = build_html_eval_user_prompt(
+                        task=task.description,
+                        elements=perception.elements,
+                        step_idx=step_idx,
+                        total_steps=len(task.actions_gt),
+                        website=task.website,
+                        domain=task.domain,
+                    )
 
-                if perception.screenshot:
-                    img = _Image.open(_BytesIO(perception.screenshot))
-                    iw, ih = img.size
+                    messages = [
+                        {"role": "system", "content": HTML_EVAL_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_msg},
+                    ]
 
-                    for elem in perception.elements:
-                        x, y, w, h = elem.bbox
-                        elem.bbox = (
-                            x * vw / iw,
-                            y * vh / ih,
-                            w * vw / iw,
-                            h * vh / ih,
+                    # HTML mode only needs ~150 tokens for JSON response.
+                    # Temporarily reduce max_tokens to stay within model's
+                    # context window (input + output <= 4096).
+                    saved_max_tokens = reasoner._max_tokens
+                    reasoner._max_tokens = min(reasoner._max_tokens, 256)
+                    raw_text = await reasoner._call_api(messages)
+                    reasoner._max_tokens = saved_max_tokens
+
+                    if step_idx == 0:
+                        logger.info(
+                            f"  [DIAG] Step 1 VLM raw output: {raw_text[:500]}"
+                        )
+                    else:
+                        logger.debug(
+                            f"  VLM raw (step {step_idx+1}): {raw_text[:300]}"
                         )
 
-                    if ih > MAX_IMAGE_HEIGHT:
-                        scale = MAX_IMAGE_HEIGHT / ih
-                        new_w = int(iw * scale)
-                        new_h = MAX_IMAGE_HEIGHT
-                        img = img.resize((new_w, new_h), _Image.LANCZOS)
-                        # Bbox values are normalized ratios [0,1].
-                        # Proportional resize preserves ratios — no bbox
-                        # adjustment needed.  The SoM marker will multiply
-                        # by the new viewport dimensions.
-                        buf = _BytesIO()
-                        img.save(buf, format="PNG")
-                        perception.screenshot = buf.getvalue()
-                        iw, ih = new_w, new_h
-                    else:
-                        buf = _BytesIO()
-                        img.save(buf, format="PNG")
-                        perception.screenshot = buf.getvalue()
+                else:
+                    # ── SoM visual mode: screenshot + annotation → VLM ──
+                    from visumark.core.types import ReasonerOutput
+                    from visumark.action.parser import ActionParser
+                    from visumark.reasoning.prompts.som_prompts import EVAL_SYSTEM_PROMPT
+                    import base64 as _base64
 
-                    annotated = perceptor.marker.annotate(
-                        perception.screenshot,
-                        perception.elements,
-                        viewport_w=iw,
-                        viewport_h=ih,
+                    perception, bridge = await perceptor.perceive(env)
+
+                    # Bbox correction for full-page screenshots
+                    from io import BytesIO as _BytesIO
+                    from PIL import Image as _Image
+
+                    MAX_IMAGE_HEIGHT = 4096
+                    vw, vh = 1280, 720
+
+                    if perception.screenshot:
+                        img = _Image.open(_BytesIO(perception.screenshot))
+                        iw, ih = img.size
+
+                        for elem in perception.elements:
+                            x, y, w, h = elem.bbox
+                            elem.bbox = (
+                                x * vw / iw,
+                                y * vh / ih,
+                                w * vw / iw,
+                                h * vh / ih,
+                            )
+
+                        if ih > MAX_IMAGE_HEIGHT:
+                            scale = MAX_IMAGE_HEIGHT / ih
+                            new_w = int(iw * scale)
+                            new_h = MAX_IMAGE_HEIGHT
+                            img = img.resize((new_w, new_h), _Image.LANCZOS)
+                            buf = _BytesIO()
+                            img.save(buf, format="PNG")
+                            perception.screenshot = buf.getvalue()
+                            iw, ih = new_w, new_h
+                        else:
+                            buf = _BytesIO()
+                            img.save(buf, format="PNG")
+                            perception.screenshot = buf.getvalue()
+
+                        annotated = perceptor.marker.annotate(
+                            perception.screenshot,
+                            perception.elements,
+                            viewport_w=iw,
+                            viewport_h=ih,
+                        )
+                        perception.annotated_screenshot = annotated
+
+                    # Build image+text prompt
+                    user_msg = (
+                        f"Task: {task.description}\n\n"
+                        f"Step {step_idx + 1} of {len(task.actions_gt)}.\n"
+                        f"Website: {task.website} ({task.domain}).\n"
+                        f"Look at the marked screenshot. Which numbered element should be interacted with NEXT?\n"
+                        f"Return ONLY the JSON object."
                     )
-                    perception.annotated_screenshot = annotated
 
-                # 3. VLM reasoning with evaluation-specific prompt
+                    content: list[dict] = [{"type": "text", "text": user_msg}]
+                    img_bytes = perception.annotated_screenshot or perception.screenshot
+                    if img_bytes:
+                        b64 = _base64.b64encode(img_bytes).decode("utf-8")
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"},
+                        })
+
+                    messages = [
+                        {"role": "system", "content": EVAL_SYSTEM_PROMPT},
+                        {"role": "user", "content": content},
+                    ]
+
+                    raw_text = await reasoner._call_api(messages)
+
+                    img_kb = len(img_bytes) / 1024 if img_bytes else 0
+                    logger.debug(
+                        f"  VLM raw (step {step_idx+1}, img={img_kb:.0f}KB): "
+                        f"{raw_text[:300]}"
+                    )
+                    if step_idx == 0:
+                        logger.info(
+                            f"  [DIAG] Step 1 VLM raw output: {raw_text[:500]}"
+                        )
+
+                # ── Shared: parse response and compare with GT ──
                 from visumark.core.types import ReasonerOutput
-                from visumark.action.parser import ActionParser
-                from visumark.reasoning.prompts.som_prompts import EVAL_SYSTEM_PROMPT
-                import base64 as _base64
-
-                # Build eval prompt: system + user message
-                user_msg = (
-                    f"Task: {task.description}\n\n"
-                    f"Step {step_idx + 1} of {len(task.actions_gt)}.\n"
-                    f"Website: {task.website} ({task.domain}).\n"
-                    f"Look at the marked screenshot. Which numbered element should be interacted with NEXT?\n"
-                    f"Return ONLY the JSON object."
-                )
-
-                content: list[dict] = [{"type": "text", "text": user_msg}]
-                img_bytes = perception.annotated_screenshot or perception.screenshot
-                if img_bytes:
-                    b64 = _base64.b64encode(img_bytes).decode("utf-8")
-                    content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"},
-                    })
-
-                messages = [
-                    {"role": "system", "content": EVAL_SYSTEM_PROMPT},
-                    {"role": "user", "content": content},
-                ]
-
-                raw_text = await reasoner._call_api(messages)
-
-                # Diagnostic: log raw VLM response + image info
-                img_kb = len(img_bytes) / 1024 if img_bytes else 0
-                logger.debug(
-                    f"  VLM raw (step {step_idx+1}, img={img_kb:.0f}KB): "
-                    f"{raw_text[:300]}"
-                )
-                # Always log the first step's raw output for debugging
-                if step_idx == 0:
-                    logger.info(
-                        f"  [DIAG] Step 1 VLM raw output: {raw_text[:500]}"
-                    )
-
-                # Parse response
                 parser = ActionParser()
                 import re as _re
                 thought = ""
@@ -447,6 +501,9 @@ def main():
     p_eval.add_argument("--model", "-m", default=None)
     p_eval.add_argument("--api-key", default=None)
     p_eval.add_argument("--base-url", default=None)
+    p_eval.add_argument("--mode", default="som",
+                        choices=["som", "html"],
+                        help="Perception mode: som (visual) or html (text-based)")
     p_eval.add_argument("--verbose", "-v", action="store_true")
     p_eval.set_defaults(func=cmd_evaluate)
 
