@@ -161,6 +161,7 @@ async def ws_agent(ws: WebSocket):
     base_url = config.get("base_url") or reas_cfg.get("base_url")
     max_steps = config.get("max_steps", 30)
     headless = config.get("headless", False)
+    perception_mode = config.get("mode", "som")  # "som" or "html"
 
     if not task_desc:
         await ws.send_json({"type": "error", "message": "Task description is required"})
@@ -169,7 +170,7 @@ async def ws_agent(ws: WebSocket):
 
     # Build components
     from visumark.environment.live_env import LiveEnvironment
-    from visumark.perception.som_perceptor import SoMPerceptor
+    from visumark.perception.base import PerceptorFactory
     from visumark.reasoning.factory import ReasonerFactory
     from visumark.core.agent import Agent, StepCallbacks
     from visumark.dataset.base import TaskInstance
@@ -178,12 +179,8 @@ async def ws_agent(ws: WebSocket):
     # reas_cfg already loaded above
 
     env = LiveEnvironment(headless=headless, viewport=(1280, 720))
-    perceptor = SoMPerceptor({
-        "max_elements": 60,
-        "font_size": 11,
-        "use_accessibility_tree": True,
-        "show_text_hints": False,
-    })
+    perc_config = load_config().get("perception", {})
+    perceptor = PerceptorFactory.create(perception_mode, perc_config)
     reasoner = ReasonerFactory.create(
         provider=provider,
         model=model,

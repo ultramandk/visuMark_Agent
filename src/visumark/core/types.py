@@ -32,7 +32,8 @@ class ActionType(str, Enum):
     WAIT = "wait"          # Wait for a duration
     ANSWER = "answer"      # Task completed — return answer
     FAIL = "fail"          # Task impossible — return reason
-    CAPTCHA = "captcha"    # CAPTCHA detected — pause for manual intervention
+    CAPTCHA = "captcha"    # CAPTCHA detected — pause for human verification
+    LOGIN = "login"        # Login page detected — pause for human credentials
 
 
 @dataclass
@@ -97,7 +98,7 @@ class Action:
     @property
     def is_terminal(self) -> bool:
         """Whether this action ends the step — no verification needed."""
-        return self.action_type in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA)
+        return self.action_type in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA, ActionType.LOGIN)
 
 
 # ============================================================================
@@ -148,6 +149,7 @@ class Perception:
     elements: list[PageElement] = field(default_factory=list)
     page_title: str = ""
     page_url: str = ""
+    page_text: str = ""                       # body.innerText for HTML mode
 
 
 @dataclass

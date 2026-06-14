@@ -63,16 +63,29 @@ class AnthropicReasoner(BaseReasoner):
         task: str,
         history: list[StepRecord],
     ) -> ReasonerOutput:
-        from visumark.reasoning.prompts.som_prompts import (
-            SYSTEM_PROMPT,
-            build_som_user_prompt,
-        )
+        has_screenshot = bool(perception.screenshot or perception.annotated_screenshot)
 
-        system_msg = SYSTEM_PROMPT
-        user_msg = build_som_user_prompt(task, perception, history)
+        if has_screenshot:
+            from visumark.reasoning.prompts.som_prompts import (
+                SYSTEM_PROMPT,
+                build_som_user_prompt,
+            )
+            system_msg = SYSTEM_PROMPT
+            user_msg = build_som_user_prompt(task, perception, history)
+        else:
+            from visumark.reasoning.prompts.html_prompts import (
+                HTML_LIVE_SYSTEM_PROMPT,
+                build_html_live_user_prompt,
+            )
+            system_msg = HTML_LIVE_SYSTEM_PROMPT
+            user_msg = build_html_live_user_prompt(
+                task, perception.elements, history,
+                page_title=perception.page_title,
+                page_url=perception.page_url,
+                page_text=perception.page_text,
+            )
 
         # Build content blocks
-        # Use SoM-annotated screenshot for VLM, fallback to clean screenshot
         content: list[dict] = [{"type": "text", "text": user_msg}]
         img_bytes = perception.annotated_screenshot or perception.screenshot
         if img_bytes:

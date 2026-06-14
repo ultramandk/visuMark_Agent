@@ -52,6 +52,7 @@ const settingApiKey = $("#setting-api-key");
 const settingBaseUrl = $("#setting-base-url");
 const settingMaxSteps = $("#setting-max-steps");
 const settingHeadless = $("#setting-headless");
+const settingMode = $("#setting-mode");
 
 // ============================================================================
 // Helpers
@@ -153,6 +154,7 @@ function loadSettings() {
             settingBaseUrl.value = saved.baseUrl || "";
             settingMaxSteps.value = saved.maxSteps || 30;
             settingHeadless.checked = saved.headless === true;
+            settingMode.value = saved.mode || "som";
         }
     } catch { /* ignore */ }
 }
@@ -165,6 +167,7 @@ function saveSettings() {
         baseUrl: settingBaseUrl.value,
         maxSteps: parseInt(settingMaxSteps.value, 10) || 15,
         headless: settingHeadless.checked,
+        mode: settingMode.value,
     }));
 }
 
@@ -277,6 +280,7 @@ function buildTaskConfig(task, url) {
         base_url: settingBaseUrl.value.trim() || null,
         max_steps: parseInt(settingMaxSteps.value, 10) || 30,
         headless: settingHeadless.checked,
+        mode: settingMode.value || "som",
     };
 }
 
@@ -723,7 +727,20 @@ btnNewTask.addEventListener("click", () => {
                 <button class="example-chip" data-task="深圳到广州的高铁时刻表" data-url="https://www.baidu.com">🚄 高铁时刻表</button>
                 <button class="example-chip" data-task="豆瓣电影TOP250第一名是什么" data-url="https://www.baidu.com">🎬 豆瓣电影TOP250</button>
                 <button class="example-chip" data-task="查询人民币对美元的汇率" data-url="https://www.baidu.com">💰 汇率查询</button>
+                <button class="example-chip" data-task="打开百度翻译，把'人工智能正在改变世界'翻译成英文" data-url="https://fanyi.baidu.com">🌐 翻译整句到英文</button>
+                <button class="example-chip" data-task="查询今天黄金的实时价格（人民币/克）" data-url="https://www.baidu.com">🥇 实时金价查询</button>
+                <button class="example-chip" data-task="搜索从深圳北到广州南的高铁，告诉我最早一班的时间" data-url="https://www.baidu.com">🚄 高铁最早班次</button>
+                <button class="example-chip" data-task="本周末深圳天气怎么样？适合出门吗" data-url="https://www.bing.com">🌦️ 周末天气+出行建议</button>
                 <button class="example-chip" data-task="今天有什么热门新闻" data-url="https://www.baidu.com">📰 今日热门新闻</button>
+                <button class="example-chip" data-task="搜索'周杰伦'，找到他的出生日期和代表作前3首" data-url="https://www.baidu.com">🎤 明星信息查询</button>
+                <button class="example-chip" data-task="彭博社今天的头条新闻标题是什么" data-url="https://www.bloomberg.com">📈 彭博社头条</button>
+                <button class="example-chip" data-task="搜索南昌现在的天气，然后查一下南昌到广州的火车票，告诉我最早的一班是几点" data-url="https://www.bing.com">🌤️🚄 天气+火车票组合查询</button>
+                <button class="example-chip" data-task="分别搜索茅台和腾讯的最新股价，比较哪个涨幅更高" data-url="https://www.bing.com">📊 股票对比查询</button>
+                <button class="example-chip" data-task="搜索iPhone 16 Pro Max和三Samsung Galaxy S25 Ultra的详细参数，告诉我哪一个屏幕更大" data-url="https://www.bing.com">📱 手机参数对比</button>
+                <button class="example-chip" data-task="查询今天人民币对美元、欧元、日元三种货币的汇率" data-url="https://www.bing.com">💱 多币种汇率查询</button>
+                <button class="example-chip" data-task="搜索'阿尔伯特·爱因斯坦'，然后进入他的维基百科页面，告诉我他的出生地和逝世年份" data-url="https://www.bing.com">🔬 维基百科信息提取</button>
+                <button class="example-chip" data-task="在百度翻译中输入'I love programming'翻译成中文，再翻译成日文" data-url="https://fanyi.baidu.com">🌐 多语种翻译</button>
+                <button class="example-chip" data-task="搜索暗黑破坏神4，看看它在哪个平台可以玩，Metacritic评分是多少" data-url="https://www.bing.com">🎮 游戏信息查询</button>
             </div>
         </div>
         <div class="typing-indicator" id="typing-indicator">
@@ -781,7 +798,7 @@ $$(".example-chip").forEach(bindExampleChip);
 settingProvider.addEventListener("change", onProviderChange);
 
 // Auto-save settings on change
-[settingProvider, settingModel, settingApiKey, settingBaseUrl, settingMaxSteps, settingHeadless].forEach((el) => {
+[settingProvider, settingModel, settingApiKey, settingBaseUrl, settingMaxSteps, settingHeadless, settingMode].forEach((el) => {
     el.addEventListener("change", saveSettings);
     if (el.tagName === "INPUT" && el.type !== "checkbox") {
         el.addEventListener("blur", saveSettings);

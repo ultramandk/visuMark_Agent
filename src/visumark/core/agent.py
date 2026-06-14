@@ -205,11 +205,12 @@ class Agent:
                     logger.error(f"Agent failed: {result.error}")
                     break
 
-                if record.action.action_type == ActionType.CAPTCHA:
+                if record.action.action_type in (ActionType.CAPTCHA, ActionType.LOGIN):
                     vlm_url = record.perception.page_url
                     vlm_domain = self._extract_domain(vlm_url)
-                    logger.info(f"CAPTCHA detected by VLM — pausing ({vlm_domain})")
-                    await callbacks.on_captcha(record.perception.screenshot, variant="captcha")
+                    variant = "login" if record.action.action_type == ActionType.LOGIN else "captcha"
+                    logger.info(f"{record.action.action_type.value.upper()} detected by VLM — pausing ({vlm_domain})")
+                    await callbacks.on_captcha(record.perception.screenshot, variant=variant)
                     self._paused.clear()
                     await self._paused.wait()
                     # Dismissal tracking — avoid re-triggering
@@ -840,17 +841,26 @@ class Agent:
         # 4. VERIFY — compare before/after to check if the action worked
         verification = None
         post_screenshot = None
+        has_screenshot = bool(perception.annotated_screenshot)
         verify_needed = (
             self.verify_actions
             and action is not None
             and not action.is_terminal
             and self.env.is_live
-            and perception.annotated_screenshot
         )
-        if verify_needed:
+        if verify_needed and has_screenshot:
+            # Visual mode: image comparison + DOM error check + VLM verify
             await cb.on_verifying(step)
             pre_img = perception.annotated_screenshot
             for v_retry in range(self.max_verify_retries + 1):
+                verification, post_screenshot = await self._verify_action(
+                    action=action,
+                    thought=reasoner_output.thought,
+                    pre_screenshot=pre_img,
+                    task=task_description,
+                    page_url=perception.page_url,
+                    pre_clean_screenshot=perception.screenshot,
+                )
                 verification, post_screenshot = await self._verify_action(
                     action=action,
                     thought=reasoner_output.thought,
@@ -923,6 +933,25 @@ class Agent:
                         success = True
                 else:
                     break  # No retry suggested — move on
+
+        # HTML mode: lightweight feedback — check if URL changed
+        if not has_screenshot and self.env.is_live and verification is None and action is not None:
+            try:
+                cur_url = await self.env.get_page_url()
+            except Exception:
+                cur_url = ""
+            observation = ""
+            if cur_url and cur_url != perception.page_url:
+                observation = f"URL changed → {cur_url[:80]}"
+            elif action.action_type == ActionType.TYPE:
+                observation = "Text typed into field"
+            elif action.action_type == ActionType.CLICK:
+                observation = "Element clicked"
+            if observation:
+                verification = VerificationResult(
+                    effect_achieved=True,
+                    observation=observation,
+                )
 
         # Build target label for display
         target_label = ""

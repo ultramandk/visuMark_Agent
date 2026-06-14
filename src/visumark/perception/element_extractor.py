@@ -493,6 +493,21 @@ def _build_extraction_js(
         const id = i + 1;
         candidates[i].id = id;
 
+        // Helper: is this element a genuine interactive root (not just a
+        // text/icon child inside a button)?
+        function _isInteractiveRoot(el, originalTag) {{
+            const t = el.tagName.toLowerCase();
+            if (INTERACTIVE_TAGS.has(t)) return true;
+            if (INTERACTIVE_ROLES.has(el.getAttribute('role') || '')) return true;
+            if (el.getAttribute('aria-label')) return true;
+            if (el.getAttribute('data-a11y')) return true;
+            if (el.hasAttribute('onclick')) return true;
+            if (el.hasAttribute('tabindex')) return true;
+            if (el.getAttribute('contenteditable') === 'true') return true;
+            if (t === originalTag) return true;
+            return false;
+        }}
+
         // Tag the EXACT element with data-som-id using elementFromPoint.
         // CSS selectors are ambiguous for SPA pages where many elements
         // share the same tag/class (e.g. multiple <div.xmail-ui-btn>).
@@ -504,33 +519,63 @@ def _build_extraction_js(
         // This is critical for QQ Mail and other webmail clients that
         // render their UI inside iframes.
         try {{
-            const cx = candidates[i].x + candidates[i].w / 2;
-            const cy = candidates[i].y + candidates[i].h / 2;
-            let atPoint = document.elementFromPoint(cx, cy);
+            const sel = candidates[i].selector;
+            let tagged = false;
 
-            // ── iframe piercing ──
-            if (atPoint && atPoint.tagName === 'IFRAME') {{
-                try {{
-                    const iframeDoc = atPoint.contentDocument || atPoint.contentWindow.document;
-                    if (iframeDoc) {{
-                        const iframeRect = atPoint.getBoundingClientRect();
-                        const relX = cx - iframeRect.left;
-                        const relY = cy - iframeRect.top;
-                        const inner = iframeDoc.elementFromPoint(relX, relY);
-                        if (inner && inner !== iframeDoc.body && inner !== iframeDoc.documentElement) {{
-                            atPoint = inner;
-                        }}
-                    }}
-                }} catch(e) {{
-                    // cross‑origin iframe — can't access, leave atPoint as iframe
+            // ── Selector-first: if the CSS selector is precise (has #id or
+            //     [attr=val] qualifier), trust it directly.  This avoids
+            //     elementFromPoint ambiguity (e.g. Baidu search button vs
+            //     overlapping Maps link).
+            const isPrecise = sel.indexOf('#') > -1 || sel.indexOf('="') > -1;
+            if (isPrecise) {{
+                const el = document.querySelector(sel);
+                if (el) {{
+                    el.setAttribute('data-som-id', String(id));
+                    tagged = true;
                 }}
             }}
 
-            if (atPoint && atPoint !== document.body && atPoint !== document.documentElement) {{
-                atPoint.setAttribute('data-som-id', String(id));
-            }} else {{
-                // Fallback: CSS selector (main document only)
-                const el = document.querySelector(candidates[i].selector);
+            // ── elementFromPoint fallback: for generic selectors (div, span)
+            //     where multiple elements match, use the visual position.
+            if (!tagged) {{
+                const cx = candidates[i].x + candidates[i].w / 2;
+                const cy = candidates[i].y + candidates[i].h / 2;
+                let atPoint = document.elementFromPoint(cx, cy);
+
+                // iframe piercing
+                if (atPoint && atPoint.tagName === 'IFRAME') {{
+                    try {{
+                        const iframeDoc = atPoint.contentDocument || atPoint.contentWindow.document;
+                        if (iframeDoc) {{
+                            const iframeRect = atPoint.getBoundingClientRect();
+                            const relX = cx - iframeRect.left;
+                            const relY = cy - iframeRect.top;
+                            const inner = iframeDoc.elementFromPoint(relX, relY);
+                            if (inner && inner !== iframeDoc.body && inner !== iframeDoc.documentElement) {{
+                                atPoint = inner;
+                            }}
+                        }}
+                    }} catch(e) {{}}
+                }}
+
+                if (atPoint && atPoint !== document.body && atPoint !== document.documentElement) {{
+                    // Walk up to nearest interactive root
+                    let node = atPoint;
+                    const ORIGINAL_TAG = candidates[i].tag;
+                    for (let walk = 0; walk < 5 && node && node !== document.body; walk++) {{
+                        if (_isInteractiveRoot(node, ORIGINAL_TAG)) break;
+                        node = node.parentElement;
+                    }}
+                    if (node && node !== document.body) {{
+                        node.setAttribute('data-som-id', String(id));
+                        tagged = true;
+                    }}
+                }}
+            }}
+
+            // Last resort: generic CSS selector
+            if (!tagged) {{
+                const el = document.querySelector(sel);
                 if (el) el.setAttribute('data-som-id', String(id));
             }}
         }} catch(e) {{

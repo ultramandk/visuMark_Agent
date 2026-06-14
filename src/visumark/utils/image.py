@@ -101,7 +101,7 @@ def is_blank_screenshot(
 def are_screenshots_identical(
     img1: bytes,
     img2: bytes,
-    diff_pct: float = 0.005,
+    diff_pct: float = 0.0005,
 ) -> bool:
     """Check if two screenshots are effectively identical.
 

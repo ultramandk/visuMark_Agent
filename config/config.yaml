@@ -31,7 +31,7 @@ perception:
 reasoning:
   provider: qwen                 # "openai" | "anthropic" | "qwen" | "local"
   model: qwen3-vl-8b-instruct
-  api_key: "${DASHSCOPE_API_KEY}"
+  api_key: "sk-af34b0af217c4deab60b8a5046dde2a0"
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   temperature: 0.0
   max_tokens: 2048
