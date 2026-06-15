@@ -176,9 +176,10 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     # Run evaluation asynchronously
     mode = getattr(args, "mode", "som")
     html_screenshot = getattr(args, "html_screenshot", False)
+    use_rank = getattr(args, "rank", False)
     asyncio.run(_evaluate_all(
         dataset, config, reasoner, comparator, calculator, args.verbose,
-        mode=mode, html_screenshot=html_screenshot,
+        mode=mode, html_screenshot=html_screenshot, use_rank=use_rank,
     ))
 
     # Print results
@@ -193,6 +194,7 @@ async def _evaluate_all(
     dataset, config, reasoner, comparator, calculator, verbose: bool,
     mode: str = "som",
     html_screenshot: bool = False,
+    use_rank: bool = False,
 ) -> None:
     """Run evaluation on all tasks in the dataset.
 
@@ -211,6 +213,13 @@ async def _evaluate_all(
     from loguru import logger
 
     perc_cfg = config.get("perception", {}).get("som", {})
+
+    # ── BERT candidate ranking (optional) ──
+    ranker = None
+    if use_rank and mode == "html":
+        from visumark.perception.html_perceptor import CandidateRanker
+        ranker = CandidateRanker()
+        logger.info("BERT candidate ranking enabled")
 
     # ── Checkpoint: resume from interrupted runs ──
     import json as _json
@@ -310,16 +319,26 @@ async def _evaluate_all(
                     import base64 as _base64
 
                     # Build candidate list from Mind2Web data.
-                    # Shuffle to prevent the model from learning that
-                    # correct answers are always at positions 1-5.
-                    import random as _random
                     pos = list(gt_action.get("pos_candidates", []))
                     neg = list(gt_action.get("neg_candidates", []))
-                    _random.shuffle(neg)
-                    # Reserve space for all pos_candidates, fill rest with neg
-                    limit = perceptor.max_candidates - len(pos)
-                    candidates = pos + neg[:max(0, limit)]
-                    _random.shuffle(candidates)
+
+                    if ranker is not None:
+                        # BERT semantic ranking: score neg by similarity
+                        # to task, keep pos guaranteed at front.
+                        candidates = ranker.rank(
+                            task=task.description,
+                            candidates=neg,
+                            top_k=perceptor.max_candidates,
+                            keep_pos=pos,
+                        )
+                    else:
+                        # Random shuffle to prevent position bias.
+                        import random as _random
+                        _random.shuffle(neg)
+                        limit = perceptor.max_candidates - len(pos)
+                        candidates = pos + neg[:max(0, limit)]
+                        _random.shuffle(candidates)
+
                     perception, bridge = await perceptor.perceive(
                         env, candidates=candidates
                     )
@@ -615,6 +634,8 @@ def main():
                         help="Perception mode: som (visual) or html (text-based)")
     p_eval.add_argument("--html-screenshot", action="store_true",
                         help="Include page screenshot in HTML mode (default: off)")
+    p_eval.add_argument("--rank", action="store_true",
+                        help="Use BERT semantic ranking for candidate selection")
     p_eval.add_argument("--verbose", "-v", action="store_true")
     p_eval.set_defaults(func=cmd_evaluate)
 

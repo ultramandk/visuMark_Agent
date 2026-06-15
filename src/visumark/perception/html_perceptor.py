@@ -8,10 +8,11 @@ a numbered list that the LLM selects from.
 
 Architecture:
     1. Receive candidate dicts (from Mind2Web JSON, not from DOM extraction)
-    2. Parse each candidate's attributes JSON (class, aria_label, bbox, etc.)
-    3. Extract visible text by searching cleaned_html for the backend_node_id
-    4. Build PageElement objects and DOMBridge mapping
-    5. Prompt builder (in html_prompts.py) formats them for the LLM
+    2. Optionally rank candidates via BERT semantic similarity
+    3. Parse each candidate's attributes JSON (class, aria_label, bbox, etc.)
+    4. Extract visible text by searching cleaned_html for the backend_node_id
+    5. Build PageElement objects and DOMBridge mapping
+    6. Prompt builder (in html_prompts.py) formats them for the LLM
 """
 
 import json
@@ -24,6 +25,125 @@ from visumark.environment.base import BaseEnvironment
 from visumark.perception.base import BasePerceptor
 from visumark.perception.dom_bridge import DOMBridge
 from visumark.environment.dom_utils import clean_text
+
+
+# ============================================================================
+# BERT zero-shot candidate ranking
+# ============================================================================
+
+class CandidateRanker:
+    """Zero-shot BERT ranking of web element candidates.
+
+    Uses a sentence-transformers model to compute semantic similarity
+    between the task description and each candidate element's attributes
+    (tag, text, aria_label, class).  No fine-tuning required.
+
+    Model: all-MiniLM-L6-v2 (~80 MB, runs on CPU in ~0.1s per step)
+    """
+
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+        self._model_name = model_name
+        self._model = None
+
+    @property
+    def model(self):
+        """Lazy-load the sentence-transformers model."""
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+            logger.info(f"Loading ranking model: {self._model_name}")
+            self._model = SentenceTransformer(self._model_name)
+        return self._model
+
+    def _candidate_text(self, cand: dict) -> str:
+        """Build a text representation of a candidate element for ranking."""
+        tag = cand.get("tag", "")
+        attrs_str = cand.get("attributes", "{}")
+        attrs: dict = {}
+        try:
+            attrs = json.loads(attrs_str) if isinstance(attrs_str, str) else attrs_str
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        cls = attrs.get("class", "") or ""
+        aria = attrs.get("aria_label", "") or ""
+        elem_id = attrs.get("id", "") or ""
+
+        parts = [tag]
+        if aria:
+            parts.append(aria)
+        if elem_id:
+            parts.append(f"#{elem_id}")
+        if cls:
+            # Take the first class name (most specific)
+            parts.append(cls.split()[0] if cls.split() else cls)
+
+        return " ".join(parts)
+
+    def rank(
+        self,
+        task: str,
+        candidates: list[dict],
+        top_k: int = 150,
+        keep_pos: list[dict] | None = None,
+    ) -> list[dict]:
+        """Rank candidates by semantic similarity to the task description.
+
+        Args:
+            task: Natural language task description.
+            candidates: All candidate dicts to rank.
+            top_k: Number of top candidates to return.
+            keep_pos: pos_candidates that MUST be included (inserted at front).
+
+        Returns:
+            Ranked list of top_k candidates, with keep_pos prepended.
+        """
+        if not candidates:
+            return []
+
+        # Build text representations
+        texts = [self._candidate_text(c) for c in candidates]
+
+        # Encode task + candidates
+        task_emb = self.model.encode([task], show_progress_bar=False)
+        cand_embs = self.model.encode(texts, show_progress_bar=False)
+
+        # Cosine similarity
+        from sentence_transformers.util import cos_sim
+        scores = cos_sim(task_emb, cand_embs)[0]  # shape: (N,)
+
+        # Sort by score descending
+        indices = scores.argsort(descending=True).tolist()
+
+        # Take top-K (excluding pos, which are always included)
+        pos_ids = set()
+        if keep_pos:
+            for p in keep_pos:
+                pos_ids.add(p.get("backend_node_id", ""))
+
+        result = []
+        seen = set()
+        # Always include pos_candidates first
+        for p in (keep_pos or []):
+            bid = p.get("backend_node_id", "")
+            if bid not in seen:
+                result.append(p)
+                seen.add(bid)
+
+        # Fill remaining with top-ranked neg
+        for idx in indices:
+            if len(result) >= top_k:
+                break
+            cand = candidates[idx]
+            bid = cand.get("backend_node_id", "")
+            if bid not in seen:
+                result.append(cand)
+                seen.add(bid)
+
+        logger.debug(
+            f"Ranked {len(candidates)} candidates, "
+            f"top-{top_k} returned (incl {len(result) - len(indices[:top_k])} pos)"
+        )
+        return result
 
 
 class HTMLPerceptor(BasePerceptor):

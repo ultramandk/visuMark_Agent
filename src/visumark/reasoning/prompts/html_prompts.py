@@ -16,9 +16,9 @@ from visumark.core.types import PageElement
 # Evaluation system prompt
 # ============================================================================
 
-HTML_EVAL_SYSTEM_PROMPT = """You are evaluating a web agent on a benchmark. You receive a list of numbered interactive elements from a web page, each with its HTML tag, CSS class, ARIA label, bounding box position, and visible text.
+HTML_EVAL_SYSTEM_PROMPT = """You are evaluating a web agent on a benchmark. You receive a list of numbered interactive elements from a web page, each with its HTML tag, CSS class, ARIA label, and visible text.
 
-Your task: select the ONE element that should be interacted with next to make progress toward the task goal.
+Your task: select the ONE element that should be interacted with next to make progress toward the task goal. If none of the listed elements are suitable, select "0" (None of the above).
 
 ## Response Format
 
@@ -191,7 +191,9 @@ def build_html_eval_user_prompt(
     others = [e for e in elements if not e.attributes.get("is_top_level")]
 
     parts.append("")
-    parts.append("Select the ONE element to interact with next:")
+    parts.append("Select the ONE element to interact with next, or 0 if none are suitable:")
+    parts.append("")
+    parts.append("[0] None of the above")
     parts.append("")
 
     for e in top_level:

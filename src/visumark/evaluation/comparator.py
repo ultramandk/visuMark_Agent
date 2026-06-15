@@ -69,20 +69,27 @@ class Mind2WebComparator:
 
         Args:
             predicted_action: Action from VLM output.
-            gt_action: Ground truth action dict from Mind2Web:
-                {
-                    "operation": {"op": "CLICK|TYPE|SELECT", "value": "..."},
-                    "pos_candidates": [
-                        {"backend_node_id": "node-42", "tag": "button", ...},
-                        ...
-                    ]
-                }
+            gt_action: Ground truth action dict from Mind2Web.
             bridge: DOMBridge mapping SoM IDs to backend_node_ids.
             step: Step number (for display).
 
         Returns:
             StepComparison with element_correct, operation_correct, step_success.
         """
+        # --- None of the above ---
+        # If the model explicitly rejects all candidates, treat as failure.
+        if predicted_action.element_id == "0":
+            return StepComparison(
+                step=step,
+                element_correct=False,
+                operation_correct=False,
+                step_success=False,
+                token_f1=0.0,
+                predicted_node=None,
+                acceptable_nodes=self._get_acceptable_nodes(gt_action),
+                details="Model selected 'None of the above'",
+            )
+
         # --- Element Accuracy ---
         acceptable = self._get_acceptable_nodes(gt_action)
 
@@ -98,7 +105,11 @@ class Mind2WebComparator:
         gt_op = gt_action["operation"]["op"]  # "CLICK" | "TYPE" | "SELECT"
         gt_value = gt_action["operation"].get("value")
         token_f1 = self._check_operation(predicted_action, gt_op, gt_value)
-        operation_correct = token_f1 >= 0.5  # Mind2Web paper threshold
+        # Paper: "A step is successful only if both the selected element
+        # and the predicted operation are CORRECT."  "Correct" means the
+        # token-level F1 equals exactly 1.0 (perfect match).  We use
+        # >= 0.9999 to avoid floating-point edge cases.
+        operation_correct = token_f1 >= 0.9999
 
         # --- Step Success ---
         if element_correct is None:
