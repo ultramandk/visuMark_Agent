@@ -54,6 +54,8 @@ const browserElemCount     = $("#browser-elem-count");
 /* Screencast state */
 let screencastMeta = null;     // { deviceWidth, deviceHeight, pageScaleFactor }
 let isScreencastActive = false;
+let screencastTimeoutId = null;
+const SCREENCAST_TIMEOUT_MS = 3000;  // 3s without a frame → stream considered dead
 
 // Dynamic element lookup
 function getTypingIndicator() {
@@ -147,6 +149,7 @@ function updateBrowserPanel(screenshotB64, url, step, elementsCount) {
 }
 
 function resetBrowserPanel() {
+    clearScreencastTimeout();
     browserPlaceholder.style.display = "";
     browserStreamWrapper.style.display = "none";
     browserScreenshot.style.display = "none";
@@ -162,8 +165,29 @@ function resetBrowserPanel() {
 // Screencast — live browser streaming via CDP
 // ============================================================================
 
+function startScreencastTimeout() {
+    clearScreencastTimeout();
+    screencastTimeoutId = setTimeout(() => {
+        console.warn("[screencast] No frame for " + (SCREENCAST_TIMEOUT_MS / 1000) + "s — stream dead, falling back to agent screenshots");
+        isScreencastActive = false;
+        screencastTimeoutId = null;
+        browserStepInfo.textContent = "实时画面已断开";
+        toast("实时画面流已断开，切换为步骤截图模式", "info");
+    }, SCREENCAST_TIMEOUT_MS);
+}
+
+function clearScreencastTimeout() {
+    if (screencastTimeoutId !== null) {
+        clearTimeout(screencastTimeoutId);
+        screencastTimeoutId = null;
+    }
+}
+
 function handleScreencastFrame(msg) {
     if (!msg.data) return;
+
+    // Got a frame — reset the dead-stream timeout
+    clearScreencastTimeout();
 
     // Hide placeholder, show stream wrapper
     browserPlaceholder.style.display = "none";
@@ -181,6 +205,9 @@ function handleScreencastFrame(msg) {
 
     // Update footer
     browserStepInfo.textContent = "实时画面";
+
+    // Arm the timeout — stream considered dead if no frame arrives in time
+    startScreencastTimeout();
 }
 
 // ============================================================================

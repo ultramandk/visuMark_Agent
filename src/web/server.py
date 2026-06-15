@@ -356,27 +356,29 @@ async def ws_agent(ws: WebSocket):
             screencast_cdp = await env.get_cdp_session()
             await screencast_cdp.send("Page.startScreencast", {
                 "format": "jpeg",
-                "quality": 75,
-                "maxWidth": 1280,
-                "maxHeight": 720,
-                "everyNthFrame": 1,
+                "quality": 65,
+                "maxWidth": 960,
+                "maxHeight": 540,
+                "everyNthFrame": 2,
             })
-            logger.info("CDP screencast started")
+            logger.info("CDP screencast started (960x540, q65, every 2nd frame)")
 
-            frame_queue: asyncio.Queue = asyncio.Queue()
+            frame_queue: asyncio.Queue = asyncio.Queue(maxsize=4)
+            ack_failures = 0
+            MAX_ACK_FAILURES = 5
 
             def _on_screencast_frame(data: dict):
                 try:
                     frame_queue.put_nowait(data)
                 except asyncio.QueueFull:
-                    pass  # drop frame if queue is full
+                    pass  # drop oldest-like frame if queue is full
 
             screencast_cdp.on("Page.screencastFrame", _on_screencast_frame)
 
             # Stream frames to frontend
             while not ws_disconnected.is_set():
                 try:
-                    frame = await asyncio.wait_for(frame_queue.get(), timeout=0.8)
+                    frame = await asyncio.wait_for(frame_queue.get(), timeout=1.0)
                     if ws_disconnected.is_set():
                         break
                     await ws.send_json({
@@ -394,10 +396,31 @@ async def ws_agent(ws: WebSocket):
                             "Page.screencastFrameAck",
                             {"sessionId": frame["sessionId"]},
                         )
-                    except Exception:
-                        pass
+                        ack_failures = 0  # reset on success
+                    except Exception as ack_exc:
+                        ack_failures += 1
+                        logger.warning(
+                            f"Screencast ack failed ({ack_failures}/{MAX_ACK_FAILURES}): {ack_exc}"
+                        )
+                        if ack_failures >= MAX_ACK_FAILURES:
+                            logger.error("Too many screencast ack failures — stopping stream")
+                            break
                 except asyncio.TimeoutError:
-                    continue
+                    # No frame received — check if CDP is still alive
+                    try:
+                        await screencast_cdp.send("Page.stopScreencast")
+                        await screencast_cdp.send("Page.startScreencast", {
+                            "format": "jpeg",
+                            "quality": 65,
+                            "maxWidth": 960,
+                            "maxHeight": 540,
+                            "everyNthFrame": 2,
+                        })
+                        logger.info("CDP screencast restarted after idle period")
+                        ack_failures = 0
+                    except Exception:
+                        logger.warning("Screencast restart failed — stream may be dead")
+                        break
                 except (WebSocketDisconnect, Exception):
                     break
         except Exception as exc:
