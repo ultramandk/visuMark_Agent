@@ -73,7 +73,7 @@ GET /api/som-tree?url=<网址>&annotate=true&max_elements=50&headless=true
 ### 命令行
 
 ```bash
-python scripts/run_agent.py -t "搜索去巴黎的机票" -u "https://www.google.com/travel/flights"
+python scripts/run_agent.py -t "搜索去巴黎的机票" -u "https://www.bing.com"
 python scripts/evaluate.py --tasks data/tasks_example.json   # 批量评测
 ```
 

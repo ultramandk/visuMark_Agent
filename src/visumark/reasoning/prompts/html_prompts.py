@@ -63,15 +63,17 @@ Respond with a JSON object ONLY:
 | Action | Description | Required Fields |
 |--------|-------------|----------------|
 | click | Click the numbered element | action, element_id |
-| type | Type text into the numbered input | action, element_id, value |
+| type | Type into a text-input ONLY (search box, form field). Never TYPE into buttons, images, or links. | action, element_id, value |
 | scroll down | Scroll the page down | action |
 | scroll up | Scroll the page up | action |
 | goto | Navigate to a URL | action, value |
 | press | Press a key (Enter, Escape, Tab) | action, value |
 | captcha | Pause for human to pass verification | action, value |
 | login | Pause for human to enter credentials | action, value |
-| answer | Task is FULLY COMPLETE — agent STOPS | action, value |
+| answer | Task complete — use element_id to capture image | action, value, optional: element_id |
 | fail | Task is IMPOSSIBLE — agent STOPS | action, value |
+
+**answer with image**: If the task asks for an image (video cover, photo, etc.), include element_id in your answer. Example: {"action": "answer", "value": "封面", "element_id": "7"}
 
 ## Rules
 
@@ -88,11 +90,11 @@ Respond with a JSON object ONLY:
 - Do NOT keep clicking random elements on a wrong page.
 - Check the page URL and title shown above.
 
-## Task Completion — use "answer" IMMEDIATELY
-- If the page clearly shows the answer to the user's question → use **answer** with the result.
-- Examples: search results showing the location, a product price displayed, a translation result, weather info.
-- Do NOT keep clicking or scrolling after you have the answer.
-- Example: {"plan": "搜索中山大学位置", "thought": "页面显示了中山大学南校园的地址", "action": "answer", "value": "中山大学广州校区南校园位于广州市海珠区新港西路135号"}
+## !! RULE #1 — ANSWER IMMEDIATELY !!
+- As soon as the page shows the answer to the user's question → use **answer** immediately.
+- Do NOT keep scrolling, clicking, or exploring after you have the answer.
+- The answer is usually visible as TEXT in the element list or page content.
+- For image tasks (avatar, cover, photo): DO NOT click the image. Just find its element_id and answer. The system crops it. Example: {"action": "answer", "value": "B站视频作者头像", "element_id": "7"}
 
 ## CAPTCHA / Login
 - If you see error messages about verification or security checks → use captcha.

@@ -131,6 +131,36 @@ def are_screenshots_identical(
         return False
 
 
+def crop_element(
+    image_bytes: bytes,
+    bbox: tuple[float, float, float, float],
+    padding: int = 8,
+) -> bytes:
+    """Crop an image to a specific element's bounding box.
+
+    Args:
+        image_bytes: PNG/JPEG bytes of the full page screenshot.
+        bbox: Normalized (x, y, w, h) in [0, 1].
+        padding: Extra pixels around the element.
+
+    Returns:
+        Cropped image bytes (PNG).
+    """
+    try:
+        img = Image.open(BytesIO(image_bytes)).convert("RGBA")
+        iw, ih = img.size
+        x1 = max(0, int(bbox[0] * iw) - padding)
+        y1 = max(0, int(bbox[1] * ih) - padding)
+        x2 = min(iw, int((bbox[0] + bbox[2]) * iw) + padding)
+        y2 = min(ih, int((bbox[1] + bbox[3]) * ih) + padding)
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            return image_bytes  # Too small, return full image
+        cropped = img.crop((x1, y1, x2, y2))
+        return image_to_bytes(cropped, "PNG")
+    except Exception:
+        return image_bytes
+
+
 def highlight_element(
     image_bytes: bytes,
     bbox: tuple[float, float, float, float],

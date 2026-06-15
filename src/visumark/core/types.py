@@ -254,6 +254,7 @@ class TaskRecord:
     task_description: str
     success: bool
     answer: str | None = None
+    answer_image: bytes | None = None   # Cropped element screenshot
     total_steps: int = 0
     steps: list[StepRecord] = field(default_factory=list)
     error: str | None = None
