@@ -1,8 +1,8 @@
 [
     {
         "id": 1,
-        "description": "Search for 'machine learning' on Google and report the number of results shown",
-        "url": "https://www.google.com"
+        "description": "Search for 'machine learning' on Bing and report the number of results shown",
+        "url": "https://www.bing.com"
     },
     {
         "id": 2,

@@ -7,7 +7,7 @@ Subcommands:
     serve     Start the Web UI server
 
 Usage:
-    python scripts/cli.py run --task "搜索航班" --url "https://google.com/travel/flights"
+    python scripts/cli.py run --task "搜索航班" --url "https://www.bing.com"
     python scripts/cli.py evaluate --split test_cross_task --num 10
     python scripts/cli.py serve --port 8000
 """

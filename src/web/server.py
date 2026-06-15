@@ -154,7 +154,7 @@ async def ws_agent(ws: WebSocket):
     from visumark.utils.config import load_config
 
     task_desc = config.get("task", "")
-    url = config.get("url", "https://www.google.com")
+    url = config.get("url", "https://www.bing.com")
     # 从 YAML 配置读取默认值，前端可覆盖
     reas_cfg = load_config().get("reasoning", {})
     provider = config.get("provider") or reas_cfg.get("provider", "local")
