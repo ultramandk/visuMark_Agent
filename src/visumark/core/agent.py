@@ -64,6 +64,10 @@ class StepCallbacks:
         """Action decided — frontend can show what will be executed, with target highlight."""
         pass
 
+    async def on_post_action(self, step: int, post_screenshot: bytes) -> None:
+        """Post-action screenshot ready — frontend shows it immediately before verification."""
+        pass
+
     async def on_verifying(self, step: int) -> None:
         """Verification started — frontend can show verifying animation."""
         pass
@@ -112,6 +116,7 @@ class Agent:
         screenshot_dir: str | Path = "./data/screenshots",
         verify_actions: bool = True,
         max_verify_retries: int = 1,
+        debug_mode: bool = False,
     ):
         self.perceptor = perceptor
         self.reasoner = reasoner
@@ -122,6 +127,7 @@ class Agent:
         self.screenshot_dir = Path(screenshot_dir)
         self.verify_actions = verify_actions
         self.max_verify_retries = max_verify_retries
+        self.debug_mode = debug_mode
 
         self.parser = ActionParser()
         self.executor = ActionExecutor()
@@ -197,6 +203,14 @@ class Agent:
                 if record.action.action_type == ActionType.ANSWER:
                     result.success = True
                     result.answer = record.action.value
+                    # Crop answer image if element_id specified
+                    if record.action.element_id and record.perception.screenshot:
+                        bbox = bridge.get_bbox(record.action.element_id)
+                        if bbox:
+                            from visumark.utils.image import crop_element
+                            result.answer_image = crop_element(
+                                record.perception.screenshot, bbox
+                            )
                     logger.success(f"Task completed: {result.answer}")
                     break
 
@@ -752,12 +766,13 @@ class Agent:
         if perception.annotated_screenshot:
             (self.screenshot_dir / f"step_{step:03d}_som.jpg").write_bytes(perception.annotated_screenshot)
 
-        # Phase callback: screenshot ready
-        await cb.on_perceive(
-            step,
-            perception.screenshot or b"",
-            len(perception.elements),
-        )
+        # Debug mode: show SoM-annotated screenshot FIRST, so the user
+        # can inspect element labels.  The before/after comparison
+        # images remain clean.
+        if self.debug_mode and perception.annotated_screenshot:
+            await cb.on_perceive(step, perception.annotated_screenshot, len(perception.elements))
+        else:
+            await cb.on_perceive(step, perception.screenshot or b"", len(perception.elements))
 
         # ── Programmatic login page detection ──
         # Check the page for login indicators.  Only fires when the user
@@ -849,18 +864,19 @@ class Agent:
             and self.env.is_live
         )
         if verify_needed and has_screenshot:
-            # Visual mode: image comparison + DOM error check + VLM verify
+            # Take post-action screenshot NOW and send to frontend before
+            # verification starts — user sees before/after immediately.
+            try:
+                quick_post = await self.env.screenshot()
+                if quick_post:
+                    post_screenshot = quick_post
+                    await cb.on_post_action(step, quick_post)
+            except Exception as e:
+                logger.warning(f"on_post_action failed: {e}")
+
             await cb.on_verifying(step)
             pre_img = perception.annotated_screenshot
             for v_retry in range(self.max_verify_retries + 1):
-                verification, post_screenshot = await self._verify_action(
-                    action=action,
-                    thought=reasoner_output.thought,
-                    pre_screenshot=pre_img,
-                    task=task_description,
-                    page_url=perception.page_url,
-                    pre_clean_screenshot=perception.screenshot,
-                )
                 verification, post_screenshot = await self._verify_action(
                     action=action,
                     thought=reasoner_output.thought,

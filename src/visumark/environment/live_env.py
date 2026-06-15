@@ -31,7 +31,7 @@ class LiveEnvironment(BaseEnvironment):
         self._playwright = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
-        self._page: Page | None = None
+        self.__page: Page | None = None           # Internal storage
         self._known_page_ids: set[int] = set()   # Track pages per-action
         self._cdp_session = None  # Lazily-created CDP session for screencast
 
@@ -210,12 +210,18 @@ class LiveEnvironment(BaseEnvironment):
         Returns a Playwright CDPSession that can be used for
         Page.startScreencast / Input.dispatchMouseEvent etc.
         """
-        if self._cdp_session is not None:
-            return self._cdp_session
-        if not self._page:
+        page = self._page  # Always the latest tab
+        if not page:
             raise RuntimeError("Browser not started — cannot create CDP session")
+        # Always recreate CDP session to follow tab switches
+        if self._cdp_session is not None:
+            try:
+                await self._cdp_session.detach()
+            except Exception:
+                pass
+            self._cdp_session = None
         from playwright.async_api import CDPSession
-        self._cdp_session = await self._context.new_cdp_session(self._page)
+        self._cdp_session = await self._context.new_cdp_session(page)
         logger.info("CDP session created for screencast streaming")
         return self._cdp_session
 
@@ -359,27 +365,27 @@ class LiveEnvironment(BaseEnvironment):
         await self._page.set_content(html, wait_until="domcontentloaded")
 
     async def screenshot(self) -> bytes:
-        if not self._page:
+        if not self.page:
             raise RuntimeError("Browser not started")
-        return await self._page.screenshot(full_page=False, type="png")
+        return await self.page.screenshot(full_page=False, type="png")
 
     async def get_page_html(self) -> str:
-        if not self._page:
+        if not self.page:
             raise RuntimeError("Browser not started")
-        return await self._page.content()
+        return await self.page.content()
 
     async def get_accessibility_tree(self) -> dict:
         """Fetch the Chromium Accessibility Tree via CDP."""
-        if not self._page:
+        if not self.page:
             raise RuntimeError("Browser not started")
         try:
-            cdp = await self._page.evaluate("""async () => {
+            cdp = await self.page.evaluate("""async () => {
                 const root = await (window.cdc_adoQpoasnfa76pfcZLmcfl_Array ||
                     window.__playwright__chrome_devtools__);
                 return null;
             }""")
             # Use Playwright's built-in accessibility snapshot
-            snapshot = await self._page.accessibility.snapshot()
+            snapshot = await self.page.accessibility.snapshot()
             return snapshot or {}
         except Exception:
             return {}
@@ -389,14 +395,14 @@ class LiveEnvironment(BaseEnvironment):
     # ------------------------------------------------------------------
 
     async def get_page_title(self) -> str:
-        if not self._page:
+        if not self.page:
             return ""
-        return await self._page.title()
+        return await self.page.title()
 
     async def get_page_url(self) -> str:
-        if not self._page:
+        if not self.page:
             return ""
-        return self._page.url
+        return self.page.url
 
     def get_viewport(self) -> dict[str, int]:
         return {"width": self._viewport_w, "height": self._viewport_h}
@@ -1013,5 +1019,20 @@ class LiveEnvironment(BaseEnvironment):
         return True
 
     @property
+    def _page(self) -> Page | None:
+        """Always returns the latest tab — agent & frontend are in sync."""
+        pages = self._context.pages if self._context else []
+        if pages:
+            latest = pages[-1]
+            if latest != self.__page:
+                self.__page = latest
+        return self.__page
+
+    @_page.setter
+    def _page(self, value: Page | None) -> None:
+        self.__page = value
+
+    @property
     def page(self) -> Page | None:
+        """Public alias — always the latest tab."""
         return self._page

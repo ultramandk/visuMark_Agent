@@ -55,6 +55,7 @@ const browserElemCount     = $("#browser-elem-count");
 let screencastMeta = null;     // { deviceWidth, deviceHeight, pageScaleFactor }
 let isScreencastActive = false;
 let screencastTimeoutId = null;
+let screencastWs = null;     // Separate WebSocket for screencast
 const SCREENCAST_TIMEOUT_MS = 3000;  // 3s without a frame → stream considered dead
 
 // Dynamic element lookup
@@ -70,6 +71,7 @@ const settingBaseUrl   = $("#setting-base-url");
 const settingMaxSteps  = $("#setting-max-steps");
 const settingHeadless  = $("#setting-headless");
 const settingMode      = $("#setting-mode");
+const settingDebug      = $("#setting-debug");
 
 // ============================================================================
 // Helpers
@@ -98,8 +100,10 @@ function setRunning(running) {
         btnSend.title = "停止任务";
         setStatus("running");
         showTyping();
+        connectScreencast();
     } else {
         btnSend.classList.remove("running");
+        disconnectScreencast();
         btnSend.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
         btnSend.title = "执行任务 (Enter)";
         setStatus(ws && ws.readyState === WebSocket.OPEN ? "connected" : "");
@@ -164,6 +168,32 @@ function resetBrowserPanel() {
 // ============================================================================
 // Screencast — live browser streaming via CDP
 // ============================================================================
+
+function connectScreencast() {
+    if (screencastWs && screencastWs.readyState === WebSocket.OPEN) return;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${protocol}//${window.location.host}/ws/screencast`;
+    screencastWs = new WebSocket(url);
+    screencastWs.onopen = () => console.debug("[screencast] connected");
+    screencastWs.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "screencast_frame") {
+            handleScreencastFrame(msg);
+        }
+    };
+    screencastWs.onclose = () => { screencastWs = null; };
+    screencastWs.onerror = () => { screencastWs = null; };
+}
+
+function disconnectScreencast() {
+    if (screencastWs) {
+        screencastWs.close();
+        screencastWs = null;
+    }
+    clearScreencastTimeout();
+    isScreencastActive = false;
+    screencastMeta = null;
+}
 
 function startScreencastTimeout() {
     clearScreencastTimeout();
@@ -451,6 +481,7 @@ function loadSettings() {
             settingMaxSteps.value = saved.maxSteps || 30;
             settingHeadless.checked = saved.headless === true;
             settingMode.value = saved.mode || "som";
+            settingDebug.checked = saved.debug === true;
         }
     } catch { /* ignore */ }
 }
@@ -464,6 +495,7 @@ function saveSettings() {
         maxSteps: parseInt(settingMaxSteps.value, 10) || 15,
         headless: settingHeadless.checked,
         mode: settingMode.value,
+        debug: settingDebug.checked,
     }));
 }
 
@@ -544,6 +576,7 @@ function stopTask() {
         ws = null;
     }
     setRunning(false);
+    disconnectScreencast();
     addResultMessage(false, "已手动停止");
     toast("任务已停止", "info");
 }
@@ -559,6 +592,7 @@ function buildTaskConfig(task, url) {
         max_steps: parseInt(settingMaxSteps.value, 10) || 30,
         headless: settingHeadless.checked,
         mode: settingMode.value || "som",
+        debug: settingDebug.checked,
     };
 }
 
@@ -567,6 +601,7 @@ function buildTaskConfig(task, url) {
 // ============================================================================
 
 function handleMessage(msg) {
+    console.log("[ws msg]", msg.type, msg.phase || "");
     switch (msg.type) {
         case "step_phase":
             handleStepPhase(msg);
@@ -577,13 +612,10 @@ function handleMessage(msg) {
             handleStepPhase(msg);
             showTyping();
             break;
-        case "screencast_frame":
-            handleScreencastFrame(msg);
-            break;
         case "done":
             hideTyping();
             setRunning(false);
-            addResultMessage(msg.success, msg.answer, msg.total_steps, msg.error);
+            addResultMessage(msg.success, msg.answer, msg.total_steps, msg.error, msg.answer_image);
             break;
         case "error":
             hideTyping();
@@ -602,6 +634,7 @@ function handleMessage(msg) {
 const stepTimers = {};
 
 function handleStepPhase(msg) {
+    console.log("[phase]", msg.phase, "step", msg.step, "hasScreenshot:", !!msg.screenshot, "hasPost:", !!msg.post_screenshot);
     removeWelcome();
     const stepId = "step-" + msg.step;
     let bubble = document.getElementById(stepId);
@@ -673,6 +706,14 @@ function handleStepPhase(msg) {
         }
     }
 
+    // Phase: post_action — show post screenshot immediately (before verify)
+    if (msg.phase === "post_action") {
+        if (msg.post_screenshot) {
+            updatePostScreenshot(bubble, msg.post_screenshot);
+        }
+        return;
+    }
+
     // Phase: verifying
     if (msg.phase === "verifying") {
         if (stepTimers[msg.step]) {
@@ -689,7 +730,7 @@ function handleStepPhase(msg) {
 
     // Final step → complete the bubble
     if (msg.phase !== "perceive" && msg.phase !== "reasoning" &&
-        msg.phase !== "acting" && msg.phase !== "verifying") {
+        msg.phase !== "acting" && msg.phase !== "verifying" && msg.phase !== "post_action") {
         finalizeStepBubble(bubble, msg);
         // Update browser panel with post-action screenshot (only if screencast not active)
         if (msg.post_screenshot && !isScreencastActive) {
@@ -721,6 +762,22 @@ function createStepBubble(step, screenshot, elements) {
         </div>
     `;
     return div;
+}
+
+function updatePostScreenshot(bubble, postB64) {
+    const existing = bubble.querySelector(".screenshot-compare");
+    const preImg = bubble.querySelector(".step-screenshot");
+    if (!preImg) return;
+    // Already showing comparison — skip
+    if (existing) return;
+    // Create before/after comparison from the existing perceive screenshot
+    const preSrc = preImg.src;
+    const wrapper = document.createElement("div");
+    wrapper.className = "screenshot-compare";
+    wrapper.innerHTML =
+        `<div class="screenshot-side"><span class="screenshot-label before">操作前</span><img class="step-screenshot" src="${preSrc}" alt="操作前" onclick="openLightbox(this.src)" loading="lazy" /></div>` +
+        `<div class="screenshot-side"><span class="screenshot-label after">操作后</span><img class="step-screenshot" src="data:image/png;base64,${postB64}" alt="操作后" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
+    preImg.parentElement.replaceWith(wrapper);
 }
 
 function updatePhaseContent(container, phaseClass, icon, text, showTimer) {
@@ -776,8 +833,16 @@ function finalizeStepBubble(bubble, msg) {
         detailHtml += `<div class="step-detail">${escapeHtml(msg.description)}</div>`;
     }
 
-    // Post screenshot comparison (compact, since browser panel shows it live)
-    if (msg.post_screenshot && msg.screenshot) {
+    // SoM annotated screenshot (debug mode)
+    if (msg.annotated_screenshot) {
+        detailHtml += `<div style="max-width:100%;margin-top:8px">`;
+        detailHtml += `<span class="screenshot-label" style="background:rgba(176,136,247,0.12);color:#b088f7;border:1px solid rgba(176,136,247,0.25)">SoM 标注 (调试)</span>`;
+        detailHtml += `<img class="step-screenshot" src="data:image/png;base64,${msg.annotated_screenshot}" alt="SoM标注截图" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
+    }
+
+    // Post screenshot comparison (skip if already shown via post_action phase)
+    const alreadyHasCompare = bubble.querySelector(".screenshot-compare");
+    if (!alreadyHasCompare && msg.post_screenshot && msg.screenshot) {
         detailHtml += `<div class="screenshot-compare">`;
         detailHtml += `<div class="screenshot-side"><span class="screenshot-label before">操作前</span><img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="操作前" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
         detailHtml += `<div class="screenshot-side"><span class="screenshot-label after">操作后</span><img class="step-screenshot" src="data:image/png;base64,${msg.post_screenshot}" alt="操作后" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
@@ -863,7 +928,7 @@ function addUserMessage(task, url) {
     scrollToBottom();
 }
 
-function addResultMessage(success, answer, totalSteps, error) {
+function addResultMessage(success, answer, totalSteps, error, answerImage) {
     const div = document.createElement("div");
     div.className = `message result ${success ? "success" : "fail"}`;
 
@@ -871,10 +936,15 @@ function addResultMessage(success, answer, totalSteps, error) {
     const title = success ? (answer || "任务完成") : (error || "任务失败");
     const stats = totalSteps ? `共 ${totalSteps} 步` : "";
 
+    let answerImgHtml = "";
+    if (answerImage) {
+        answerImgHtml = `<img class="result-image" src="data:image/png;base64,${answerImage}" alt="答案图片" onclick="openLightbox(this.src)" loading="lazy" />`;
+    }
     div.innerHTML = `
         <div class="bubble">
             <div class="result-icon">${icon}</div>
             <div class="result-answer">${escapeHtml(title)}</div>
+            ${answerImgHtml}
             ${stats ? `<div class="result-stats">${stats}</div>` : ""}
             <div class="msg-time">${nowTime()}</div>
         </div>
@@ -1116,6 +1186,7 @@ btnNewTask.addEventListener("click", () => {
                 <button class="example-chip" data-task="搜索'周杰伦'，找到他的出生日期和代表作前3首" data-url="https://www.baidu.com">🎤 明星信息查询</button>
                 <button class="example-chip" data-task="分别搜索茅台和腾讯的最新股价，比较哪个涨幅更高" data-url="https://www.bing.com">📊 股票对比查询</button>
                 <button class="example-chip" data-task="搜索iPhone 16 Pro Max和Samsung Galaxy S25 Ultra的详细参数，告诉我哪一个屏幕更大" data-url="https://www.bing.com">📱 手机参数对比</button>
+                <button class="example-chip" data-task="打开bilibili首页，点击第一个视频，返回作者的头像" data-url="https://www.bilibili.com">📺 B站作者头像</button>
             </div>
         </div>
         <div class="typing-indicator" id="typing-indicator">
@@ -1178,7 +1249,7 @@ $$(".example-chip").forEach(bindExampleChip);
 settingProvider.addEventListener("change", onProviderChange);
 
 // Auto-save settings on change
-[settingProvider, settingModel, settingApiKey, settingBaseUrl, settingMaxSteps, settingHeadless, settingMode].forEach((el) => {
+[settingProvider, settingModel, settingApiKey, settingBaseUrl, settingMaxSteps, settingHeadless, settingMode, settingDebug].forEach((el) => {
     el.addEventListener("change", saveSettings);
     if (el.tagName === "INPUT" && el.type !== "checkbox") {
         el.addEventListener("blur", saveSettings);
