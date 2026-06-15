@@ -278,7 +278,7 @@ async def _evaluate_all(
         if mode == "html":
             from visumark.perception.html_perceptor import HTMLPerceptor
             perceptor = HTMLPerceptor({
-                "max_candidates": 80,
+                "max_candidates": 150,
             })
         else:
             perceptor = SoMPerceptor({
@@ -309,11 +309,17 @@ async def _evaluate_all(
                     )
                     import base64 as _base64
 
-                    # Build candidate list from Mind2Web data
-                    candidates = (
-                        gt_action.get("pos_candidates", []) +
-                        gt_action.get("neg_candidates", [])
-                    )
+                    # Build candidate list from Mind2Web data.
+                    # Shuffle to prevent the model from learning that
+                    # correct answers are always at positions 1-5.
+                    import random as _random
+                    pos = list(gt_action.get("pos_candidates", []))
+                    neg = list(gt_action.get("neg_candidates", []))
+                    _random.shuffle(neg)
+                    # Reserve space for all pos_candidates, fill rest with neg
+                    limit = perceptor.max_candidates - len(pos)
+                    candidates = pos + neg[:max(0, limit)]
+                    _random.shuffle(candidates)
                     perception, bridge = await perceptor.perceive(
                         env, candidates=candidates
                     )
@@ -527,7 +533,7 @@ async def _evaluate_all(
                 await env.start()
                 if mode == "html":
                     from visumark.perception.html_perceptor import HTMLPerceptor
-                    perceptor = HTMLPerceptor({"max_candidates": 80})
+                    perceptor = HTMLPerceptor({"max_candidates": 150})
                 else:
                     perceptor = SoMPerceptor({
                         "max_elements": 600, "font_size": 11,
