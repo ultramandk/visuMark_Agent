@@ -35,6 +35,7 @@ _ACTION_MAP: dict[str, ActionType] = {
     "answer": ActionType.ANSWER,
     "fail": ActionType.FAIL,
     "captcha": ActionType.CAPTCHA,
+    "login": ActionType.LOGIN,
 }
 
 

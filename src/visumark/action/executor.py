@@ -36,7 +36,7 @@ class ActionExecutor:
         Returns:
             True if execution succeeded, False otherwise.
         """
-        if action.action_type in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA):
+        if action.action_type in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA, ActionType.LOGIN):
             return True  # Terminal — no browser operation
 
         # Resolve element selector via DOMBridge (preferred) or data-som-id fallback

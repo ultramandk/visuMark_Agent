@@ -51,26 +51,58 @@ class HTMLPerceptor(BasePerceptor):
         env: BaseEnvironment,
         candidates: list[dict] | None = None,
     ) -> tuple[Perception, DOMBridge]:
-        """Extract candidate elements from Mind2Web data.
+        """Extract candidate elements for live web or Mind2Web eval.
 
-        Args:
-            env: Offline environment with cleaned_html loaded.
-            candidates: Mind2Web candidate dicts, each with:
-                tag, backend_node_id, attributes (JSON string), is_top_level_target
-
-        Returns:
-            (Perception, DOMBridge) — elements are the numbered candidates.
+        - candidates provided → Mind2Web flow (pre-annotated data)
+        - candidates is None  → live web: run ElementExtractor on the page
         """
-        html = await env.get_page_html()
         title = await env.get_page_title()
         url = await env.get_page_url()
+        html = ""
 
         if not candidates:
-            logger.warning("No candidates provided — returning empty perception")
-            return (
-                Perception(page_title=title, page_url=url),
-                DOMBridge(),
+            # ── Live web mode: extract elements from the real page ──
+            page = env.page if hasattr(env, "page") else None
+            if page is None:
+                logger.warning("No Playwright page — returning empty perception")
+                return (Perception(page_title=title, page_url=url), DOMBridge())
+
+            from visumark.perception.element_extractor import ElementExtractor
+            extractor = ElementExtractor(
+                max_elements=self.max_candidates,
+                min_element_size=4,
             )
+            elements = await extractor.extract(page)
+
+            # Extract visible page text — non-interactive elements like
+            # search results and paragraphs aren't in the element list
+            # but contain the answer the user is looking for.
+            try:
+                page_text = await page.evaluate(
+                    "() => (document.body ? document.body.innerText : '').substring(0, 3000)"
+                )
+            except Exception:
+                page_text = ""
+
+            bridge = DOMBridge().build_from_elements(elements)
+            logger.debug(
+                f"HTML live perception: {len(elements)} elements extracted, "
+                f"bridge={bridge}"
+            )
+            return (
+                Perception(
+                    screenshot=None,
+                    annotated_screenshot=None,
+                    elements=elements,
+                    page_title=title,
+                    page_url=url,
+                    page_text=page_text,
+                ),
+                bridge,
+            )
+
+        # ── Mind2Web eval mode: use pre-annotated candidates ──
+        html = await env.get_page_html()
 
         # Limit candidates
         candidates = candidates[:self.max_candidates]

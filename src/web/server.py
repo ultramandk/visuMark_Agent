@@ -25,6 +25,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from loguru import logger
+
 from visumark.core.types import StepRecord, ActionType
 from visumark.perception.dom_bridge import DOMBridge
 from visumark.utils.logging import setup_logger
@@ -81,7 +83,7 @@ async def som_tree(
     url: str = "https://example.com",
     annotate: bool = True,
     max_elements: int = 50,
-    headless: bool = True,
+    headless: bool = False,
 ):
     """Extract Set-of-Mark element tree for any web page.
 
@@ -161,6 +163,7 @@ async def ws_agent(ws: WebSocket):
     base_url = config.get("base_url") or reas_cfg.get("base_url")
     max_steps = config.get("max_steps", 30)
     headless = config.get("headless", False)
+    perception_mode = config.get("mode", "som")  # "som" or "html"
 
     if not task_desc:
         await ws.send_json({"type": "error", "message": "Task description is required"})
@@ -169,7 +172,7 @@ async def ws_agent(ws: WebSocket):
 
     # Build components
     from visumark.environment.live_env import LiveEnvironment
-    from visumark.perception.som_perceptor import SoMPerceptor
+    from visumark.perception.base import PerceptorFactory
     from visumark.reasoning.factory import ReasonerFactory
     from visumark.core.agent import Agent, StepCallbacks
     from visumark.dataset.base import TaskInstance
@@ -178,12 +181,8 @@ async def ws_agent(ws: WebSocket):
     # reas_cfg already loaded above
 
     env = LiveEnvironment(headless=headless, viewport=(1280, 720))
-    perceptor = SoMPerceptor({
-        "max_elements": 60,
-        "font_size": 11,
-        "use_accessibility_tree": True,
-        "show_text_hints": False,
-    })
+    perc_config = load_config().get("perception", {})
+    perceptor = PerceptorFactory.create(perception_mode, perc_config)
     reasoner = ReasonerFactory.create(
         provider=provider,
         model=model,
@@ -340,14 +339,123 @@ async def ws_agent(ws: WebSocket):
         start_url=url,
     )
 
-    async def listen_for_continue():
-        """Background task: listen for 'continue' from client while agent runs."""
+    # ── CDP screencast state (shared between tasks below) ──
+    screencast_cdp = None
+    screencast_task_ref: asyncio.Task | None = None
+
+    async def setup_screencast():
+        """Wait for browser to start, then begin screencast streaming."""
+        nonlocal screencast_cdp
+        # Poll until browser page is available (agent.run calls env.start internally)
+        while not ws_disconnected.is_set() and env.page is None:
+            await asyncio.sleep(0.3)
+        if ws_disconnected.is_set() or env.page is None:
+            return
+
+        try:
+            screencast_cdp = await env.get_cdp_session()
+            await screencast_cdp.send("Page.startScreencast", {
+                "format": "jpeg",
+                "quality": 75,
+                "maxWidth": 1280,
+                "maxHeight": 720,
+                "everyNthFrame": 1,
+            })
+            logger.info("CDP screencast started")
+
+            frame_queue: asyncio.Queue = asyncio.Queue()
+
+            def _on_screencast_frame(data: dict):
+                try:
+                    frame_queue.put_nowait(data)
+                except asyncio.QueueFull:
+                    pass  # drop frame if queue is full
+
+            screencast_cdp.on("Page.screencastFrame", _on_screencast_frame)
+
+            # Stream frames to frontend
+            while not ws_disconnected.is_set():
+                try:
+                    frame = await asyncio.wait_for(frame_queue.get(), timeout=0.8)
+                    if ws_disconnected.is_set():
+                        break
+                    await ws.send_json({
+                        "type": "screencast_frame",
+                        "data": frame["data"],
+                        "metadata": {
+                            "deviceWidth": frame["metadata"]["deviceWidth"],
+                            "deviceHeight": frame["metadata"]["deviceHeight"],
+                            "pageScaleFactor": frame["metadata"].get("pageScaleFactor", 1),
+                        },
+                    })
+                    # Acknowledge frame to receive next one
+                    try:
+                        await screencast_cdp.send(
+                            "Page.screencastFrameAck",
+                            {"sessionId": frame["sessionId"]},
+                        )
+                    except Exception:
+                        pass
+                except asyncio.TimeoutError:
+                    continue
+                except (WebSocketDisconnect, Exception):
+                    break
+        except Exception as exc:
+            logger.warning(f"Screencast setup failed: {exc}")
+        finally:
+            if screencast_cdp:
+                try:
+                    await screencast_cdp.send("Page.stopScreencast")
+                except Exception:
+                    pass
+            logger.info("CDP screencast stopped")
+
+    async def forward_browser_input(inp: dict) -> None:
+        """Forward user input from frontend to the browser via CDP."""
+        if screencast_cdp is None:
+            return
+        try:
+            kind = inp.get("kind", "")
+            if kind == "mouse":
+                await screencast_cdp.send("Input.dispatchMouseEvent", {
+                    "type": inp.get("mouseType", "mouseMoved"),
+                    "x": float(inp.get("x", 0)),
+                    "y": float(inp.get("y", 0)),
+                    "button": inp.get("button", "left"),
+                    "clickCount": int(inp.get("clickCount", 1)),
+                    "modifiers": int(inp.get("modifiers", 0)),
+                })
+            elif kind == "key":
+                await screencast_cdp.send("Input.dispatchKeyEvent", {
+                    "type": inp.get("keyType", "keyDown"),
+                    "key": str(inp.get("key", "")),
+                    "code": str(inp.get("code", "")),
+                    "text": str(inp.get("text", "")),
+                    "modifiers": int(inp.get("modifiers", 0)),
+                    "windowsVirtualKeyCode": int(inp.get("windowsVirtualKeyCode", 0)),
+                })
+            elif kind == "wheel":
+                await screencast_cdp.send("Input.dispatchMouseEvent", {
+                    "type": "mouseWheel",
+                    "x": float(inp.get("x", 0)),
+                    "y": float(inp.get("y", 0)),
+                    "deltaX": float(inp.get("deltaX", 0)),
+                    "deltaY": float(inp.get("deltaY", 0)),
+                })
+        except Exception as exc:
+            logger.debug(f"Browser input forward failed: {exc}")
+
+    async def listen_for_messages():
+        """Background task: listen for 'continue' and 'browser_input' from client."""
         while not ws_disconnected.is_set():
             try:
                 raw = await ws.receive_text()
                 msg = json.loads(raw)
-                if msg.get("type") == "continue":
+                msg_type = msg.get("type", "")
+                if msg_type == "continue":
                     agent.resume()
+                elif msg_type == "browser_input":
+                    await forward_browser_input(msg.get("input", {}))
             except WebSocketDisconnect:
                 ws_disconnected.set()
                 if agent_task and not agent_task.done():
@@ -357,12 +465,10 @@ async def ws_agent(ws: WebSocket):
                 pass
 
     agent_task = asyncio.create_task(agent.run(task, callbacks=WSCallbacks()))
-    listener_task = asyncio.create_task(listen_for_continue())
+    screencast_task_ref = asyncio.create_task(setup_screencast())
+    listener_task = asyncio.create_task(listen_for_messages())
 
-    # Wait for agent to finish, then cancel listener.
-    # If the WS disconnects mid-task, the callbacks set ws_disconnected
-    # and stop sending — the agent eventually finishes (or is cancelled
-    # by the error handler in agent.run).
+    # Wait for agent to finish, then cancel listeners.
     try:
         await agent_task
     except asyncio.CancelledError:
@@ -371,8 +477,9 @@ async def ws_agent(ws: WebSocket):
         pass
     finally:
         ws_disconnected.set()
-        if listener_task and not listener_task.done():
-            listener_task.cancel()
+        for t in [screencast_task_ref, listener_task]:
+            if t and not t.done():
+                t.cancel()
         try:
             await ws.close()
         except Exception:

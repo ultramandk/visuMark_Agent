@@ -1,5 +1,7 @@
 """Live Playwright browser environment for online task execution."""
 
+import asyncio
+
 from loguru import logger
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
@@ -13,6 +15,7 @@ class LiveEnvironment(BaseEnvironment):
 
     Used for interactive task execution and live demos.
     Supports click, type, select, scroll, hover, press, goto, and wait actions.
+    Exposes CDP session for screencast streaming to frontend.
     """
 
     def __init__(
@@ -29,6 +32,8 @@ class LiveEnvironment(BaseEnvironment):
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._known_page_ids: set[int] = set()   # Track pages per-action
+        self._cdp_session = None  # Lazily-created CDP session for screencast
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -74,6 +79,9 @@ class LiveEnvironment(BaseEnvironment):
             color_scheme="light",
         )
         self._page = await self._context.new_page()
+
+        # Track pages for new-tab detection
+        self._known_page_ids = {id(p) for p in self._context.pages}
 
         # Comprehensive navigator anti-detection.
         # Overrides key detection signals on Navigator.prototype before
@@ -174,6 +182,12 @@ class LiveEnvironment(BaseEnvironment):
         logger.info(f"Live browser started (headless={self._headless})")
 
     async def stop(self) -> None:
+        if self._cdp_session:
+            try:
+                await self._cdp_session.detach()
+            except Exception:
+                pass
+            self._cdp_session = None
         if self._context:
             await self._context.close()
         if self._browser:
@@ -185,6 +199,25 @@ class LiveEnvironment(BaseEnvironment):
         self._browser = None
         self._playwright = None
         logger.info("Live browser stopped")
+
+    # ------------------------------------------------------------------
+    # CDP session (screencast streaming)
+    # ------------------------------------------------------------------
+
+    async def get_cdp_session(self):
+        """Get or create a CDP session for screencast streaming.
+
+        Returns a Playwright CDPSession that can be used for
+        Page.startScreencast / Input.dispatchMouseEvent etc.
+        """
+        if self._cdp_session is not None:
+            return self._cdp_session
+        if not self._page:
+            raise RuntimeError("Browser not started — cannot create CDP session")
+        from playwright.async_api import CDPSession
+        self._cdp_session = await self._context.new_cdp_session(self._page)
+        logger.info("CDP session created for screencast streaming")
+        return self._cdp_session
 
     # ------------------------------------------------------------------
     # Page content
@@ -454,7 +487,7 @@ class LiveEnvironment(BaseEnvironment):
                 ms = int(action.value or 1000)
                 await self._page.wait_for_timeout(ms)
 
-            elif atype in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA):
+            elif atype in (ActionType.ANSWER, ActionType.FAIL, ActionType.CAPTCHA, ActionType.LOGIN):
                 # Terminal actions — no browser operation needed
                 return True
 
@@ -462,11 +495,29 @@ class LiveEnvironment(BaseEnvironment):
                 logger.warning(f"Unknown action type: {atype}")
                 return False
 
-            # ── Post-action: detect navigation & wait for new page ──
-            # CLICK / TYPE+Enter / PRESS Enter can trigger page navigation
-            # or form submission. If the URL changed, wait for the new page
-            # to fully render so the next perception step doesn't get a
-            # blank screenshot.
+            # ── Post-action: detect new tab & navigation ──
+            # CLICK may open a new browser tab (target="_blank").  Track
+            # page creation per-action so a tab opened by step N doesn't
+            # get detected by step N+1.
+            if atype in (ActionType.CLICK, ActionType.PRESS, ActionType.TYPE):
+                try:
+                    # Wait briefly for the new tab to materialise
+                    await asyncio.sleep(0.8)
+                    all_pages = self._context.pages if self._context else []
+                    new_pages = [p for p in all_pages if id(p) not in self._known_page_ids]
+                    if new_pages:
+                        newest = new_pages[-1]
+                        logger.info(
+                            f"New tab detected — switching: {newest.url[:100]}"
+                        )
+                        self._page = newest
+                        await self.wait_for_page_ready()
+                    # Update known set so we don't re-detect
+                    self._known_page_ids = {id(p) for p in all_pages}
+                except Exception:
+                    pass
+
+            # If the URL changed on the current page, wait for render
             url_after = self._page.url
             if url_after != url_before:
                 logger.debug(f"URL changed: {url_before} → {url_after}")

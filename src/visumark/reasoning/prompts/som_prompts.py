@@ -42,7 +42,8 @@ Respond with a JSON object:
 | scroll up | Scroll the page up | action |
 | goto | Navigate to a new URL | action, value |
 | press | Press a keyboard key (Enter, Tab, Escape) | action, value |
-| captcha | Pause for human to handle CAPTCHA/login | action, value |
+| captcha | Pause for human to pass a CAPTCHA / verification | action, value |
+| login | Pause for human to enter credentials (username/password) | action, value |
 | answer | Task is FULLY COMPLETE - agent STOPS | action, value |
 | fail | Task is IMPOSSIBLE - agent STOPS | action, value |
 
@@ -54,7 +55,24 @@ Respond with a JSON object:
 4. Only use "answer" when the task is fully complete. Include the result in "value".
 5. If genuinely stuck, use "fail" and explain why.
 6. The "element_id" field must be the NUMBER on the screenshot (e.g. "3").
-7. Output ONLY the JSON object - no extra text."""
+7. Output ONLY the JSON object - no extra text.
+
+## CAPTCHA / Login — STOP IMMEDIATELY
+- If the page shows a CAPTCHA (slider, puzzle, text verification, image selection, "安全验证", "人机验证"), or a login form (username/password fields, QR code, "登录", "扫码"), or any anti-bot challenge:
+  → output captcha (for verification) or login (for credentials).
+- Do NOT attempt to solve the CAPTCHA yourself. Do NOT click verification images. Do NOT fill in passwords you don't have.
+- Do NOT try to bypass or navigate away. Just STOP and let the human handle it.
+
+## ⚠ Avoiding Repeated Failures — CRITICAL
+- Look at the Recent Actions list. Steps marked ⚠ FAILED.
+- **Do NOT repeat the same action on the same element.** If Step 3 shows ⚠ CLICK #5, do NOT click #5 again — try a different element or approach.
+- If the same action type keeps failing, change strategy: scroll first, press Enter, use goto, or try a nearby element number.
+- After 2+ consecutive ⚠ failures, pick a COMPLETELY different element or action type.
+
+## New Tab / Wrong Page Recovery
+- If a click opened a NEW TAB or navigated to an UNRELATED page: use goto to return to the original URL (shown in "Current Page" above), or press Escape to close popups.
+- Do NOT keep clicking random elements on a wrong page.
+- Always check the page URL and title to confirm you are where you expect to be."""
 
 
 # ============================================================================
@@ -84,7 +102,13 @@ Respond ONLY with a short JSON object. Keep "thought" under 50 words:
 2. For TYPE: include the exact text in "value". For SELECT: include the option text in "value".
 3. element_id must be the NUMBER shown on the element (e.g. "3").
 4. thought MUST be under 50 words. Do NOT narrate the entire task.
-5. Output ONLY the JSON. No markdown, no code blocks."""
+5. Output ONLY the JSON. No markdown, no code blocks.
+
+## New Tab / Wrong Page / Unexpected Page
+- If a click opened a NEW TAB or navigated to an UNEXPECTED page, use: scroll down, goto (back to the original URL shown at the top), or press Escape to close dialogs.
+- Do NOT click randomly on a wrong page — that wastes steps.
+- Check the page title and URL (shown above) to verify you are where you expect to be.
+- If you see a completely unrelated page, goto back to where you were."""
 
 
 # ============================================================================
@@ -155,14 +179,27 @@ def build_som_user_prompt(
     ]
 
     if history:
-        recent = history[-3:]
+        recent = history[-5:]
         lines = ["## Recent Actions"]
+        fail_count = 0
         for rec in recent:
             if rec.action:
                 act_desc = _describe_action(rec.action)
-                status = "[OK]" if rec.success else "[FAIL]"
+                # Status includes verification result, not just execution
+                if not rec.success:
+                    status = "[FAIL]"
+                    fail_count += 1
+                elif rec.verification and not rec.verification.effect_achieved:
+                    status = "[NO EFFECT]"
+                    fail_count += 1
+                elif rec.verification and rec.verification.effect_achieved:
+                    status = "[OK ✓]"
+                else:
+                    status = "[OK]"
                 lines.append(f"- [{status}] Step {rec.step}: {act_desc}")
         parts.append("\n".join(lines))
+        if fail_count >= 2:
+            parts.append("⚠️  Multiple recent actions had no effect. Try a DIFFERENT approach.")
 
     parts.append(
         "## Instruction\n"
