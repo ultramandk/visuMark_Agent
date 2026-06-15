@@ -15,6 +15,7 @@ class LiveEnvironment(BaseEnvironment):
 
     Used for interactive task execution and live demos.
     Supports click, type, select, scroll, hover, press, goto, and wait actions.
+    Exposes CDP session for screencast streaming to frontend.
     """
 
     def __init__(
@@ -32,6 +33,7 @@ class LiveEnvironment(BaseEnvironment):
         self._context: BrowserContext | None = None
         self._page: Page | None = None
         self._known_page_ids: set[int] = set()   # Track pages per-action
+        self._cdp_session = None  # Lazily-created CDP session for screencast
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -180,6 +182,12 @@ class LiveEnvironment(BaseEnvironment):
         logger.info(f"Live browser started (headless={self._headless})")
 
     async def stop(self) -> None:
+        if self._cdp_session:
+            try:
+                await self._cdp_session.detach()
+            except Exception:
+                pass
+            self._cdp_session = None
         if self._context:
             await self._context.close()
         if self._browser:
@@ -191,6 +199,25 @@ class LiveEnvironment(BaseEnvironment):
         self._browser = None
         self._playwright = None
         logger.info("Live browser stopped")
+
+    # ------------------------------------------------------------------
+    # CDP session (screencast streaming)
+    # ------------------------------------------------------------------
+
+    async def get_cdp_session(self):
+        """Get or create a CDP session for screencast streaming.
+
+        Returns a Playwright CDPSession that can be used for
+        Page.startScreencast / Input.dispatchMouseEvent etc.
+        """
+        if self._cdp_session is not None:
+            return self._cdp_session
+        if not self._page:
+            raise RuntimeError("Browser not started — cannot create CDP session")
+        from playwright.async_api import CDPSession
+        self._cdp_session = await self._context.new_cdp_session(self._page)
+        logger.info("CDP session created for screencast streaming")
+        return self._cdp_session
 
     # ------------------------------------------------------------------
     # Page content

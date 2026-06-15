@@ -2,8 +2,7 @@
  * VisuMark Agent — Web UI Application Logic
  *
  * Manages WebSocket connection to the agent backend,
- * renders chat messages, handles user input, and provides
- * screenshot lightbox functionality.
+ * split-screen browser panel + chat, slide-over history sidebar.
  */
 
 // ============================================================================
@@ -13,10 +12,9 @@ let ws = null;
 let isRunning = false;
 let currentTask = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_DELAY = 10000; // 10 seconds max
+const MAX_RECONNECT_DELAY = 10000;
 const HISTORY_KEY = "visumark_history";
 const SETTINGS_KEY = "visumark_settings";
-const SIDEBAR_KEY = "visumark_sidebar_collapsed";
 
 // ============================================================================
 // DOM references
@@ -24,35 +22,52 @@ const SIDEBAR_KEY = "visumark_sidebar_collapsed";
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-const chatMessages = $("#chat-messages");
-const taskInput = $("#task-input");
-const urlInput = $("#url-input");
-const btnSend = $("#btn-send");
-const btnAdvanced = $("#btn-advanced");
+const chatMessages     = $("#chat-messages");
+const taskInput        = $("#task-input");
+const urlInput         = $("#url-input");
+const btnSend          = $("#btn-send");
+const btnAdvanced      = $("#btn-advanced");
 const advancedSettings = $("#advanced-settings");
-const btnNewTask = $("#btn-new-task");
+const btnNewTask       = $("#btn-new-task");
 const btnToggleSidebar = $("#btn-toggle-sidebar");
-const sidebar = $("#sidebar");
-const statusDot = $("#status-dot");
-const statusText = $("#status-text");
-const lightbox = $("#lightbox");
-const lightboxImg = $("#lightbox-img");
-const lightboxClose = $("#lightbox-close");
-const toastContainer = $("#toast-container");
+const btnCloseSidebar  = $("#btn-close-sidebar");
+const sidebarOverlay   = $("#sidebar-overlay");
+const statusDot        = $("#status-dot");
+const statusText       = $("#status-text");
+const taskIndicator    = $("#task-indicator");
+const lightbox         = $("#lightbox");
+const lightboxImg      = $("#lightbox-img");
+const lightboxClose    = $("#lightbox-close");
+const toastContainer   = $("#toast-container");
 
-// Dynamic element lookup (may be recreated when chat is cleared)
+/* Browser panel elements */
+const browserPanel         = $("#browser-panel");
+const browserViewport      = $("#browser-viewport");
+const browserScreenshot    = $("#browser-screenshot");
+const browserPlaceholder   = $("#browser-placeholder");
+const browserStreamWrapper = $("#browser-stream-wrapper");
+const browserInputOverlay  = $("#browser-input-overlay");
+const browserUrl           = $("#browser-url");
+const browserStepInfo      = $("#browser-step-info");
+const browserElemCount     = $("#browser-elem-count");
+
+/* Screencast state */
+let screencastMeta = null;     // { deviceWidth, deviceHeight, pageScaleFactor }
+let isScreencastActive = false;
+
+// Dynamic element lookup
 function getTypingIndicator() {
     return $("#typing-indicator");
 }
 
 // Settings inputs
-const settingProvider = $("#setting-provider");
-const settingModel = $("#setting-model");
-const settingApiKey = $("#setting-api-key");
-const settingBaseUrl = $("#setting-base-url");
-const settingMaxSteps = $("#setting-max-steps");
-const settingHeadless = $("#setting-headless");
-const settingMode = $("#setting-mode");
+const settingProvider  = $("#setting-provider");
+const settingModel     = $("#setting-model");
+const settingApiKey    = $("#setting-api-key");
+const settingBaseUrl   = $("#setting-base-url");
+const settingMaxSteps  = $("#setting-max-steps");
+const settingHeadless  = $("#setting-headless");
+const settingMode      = $("#setting-mode");
 
 // ============================================================================
 // Helpers
@@ -77,16 +92,20 @@ function setRunning(running) {
     urlInput.disabled = running;
     if (running) {
         btnSend.classList.add("running");
-        btnSend.textContent = "⏹";
+        btnSend.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>';
         btnSend.title = "停止任务";
         setStatus("running");
         showTyping();
     } else {
         btnSend.classList.remove("running");
-        btnSend.textContent = "▶";
+        btnSend.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
         btnSend.title = "执行任务 (Enter)";
         setStatus(ws && ws.readyState === WebSocket.OPEN ? "connected" : "");
         hideTyping();
+        // Reset browser panel
+        browserStepInfo.textContent = "";
+        browserElemCount.textContent = "";
+        browserUrl.textContent = "";
     }
 }
 
@@ -106,6 +125,258 @@ function nowTime() {
 }
 
 // ============================================================================
+// Browser Panel
+// ============================================================================
+
+function updateBrowserPanel(screenshotB64, url, step, elementsCount) {
+    if (screenshotB64) {
+        browserPlaceholder.style.display = "none";
+        browserStreamWrapper.style.display = "";
+        browserScreenshot.style.display = "";
+        browserScreenshot.src = "data:image/png;base64," + screenshotB64;
+    }
+    if (url !== undefined) {
+        browserUrl.textContent = url || "";
+    }
+    if (step !== undefined) {
+        browserStepInfo.textContent = step > 0 ? `第 ${step} 步` : "";
+    }
+    if (elementsCount !== undefined && elementsCount > 0) {
+        browserElemCount.textContent = `${elementsCount} 个可交互元素`;
+    }
+}
+
+function resetBrowserPanel() {
+    browserPlaceholder.style.display = "";
+    browserStreamWrapper.style.display = "none";
+    browserScreenshot.style.display = "none";
+    browserScreenshot.src = "";
+    browserUrl.textContent = "";
+    browserStepInfo.textContent = "";
+    browserElemCount.textContent = "";
+    isScreencastActive = false;
+    screencastMeta = null;
+}
+
+// ============================================================================
+// Screencast — live browser streaming via CDP
+// ============================================================================
+
+function handleScreencastFrame(msg) {
+    if (!msg.data) return;
+
+    // Hide placeholder, show stream wrapper
+    browserPlaceholder.style.display = "none";
+    browserStreamWrapper.style.display = "";
+
+    // Store metadata for coordinate mapping
+    if (msg.metadata) {
+        screencastMeta = msg.metadata;
+    }
+
+    // Update the live frame
+    browserScreenshot.src = "data:image/jpeg;base64," + msg.data;
+    browserScreenshot.style.display = "";
+    isScreencastActive = true;
+
+    // Update footer
+    browserStepInfo.textContent = "实时画面";
+}
+
+// ============================================================================
+// Browser Input Capture — forwards mouse/key events to CDP
+// ============================================================================
+
+function initBrowserInputCapture() {
+    if (!browserInputOverlay) return;
+
+    // Track mouse button state
+    let mouseDown = false;
+    let lastMouseX = 0;
+    let lastMouseY = 0;
+
+    function getScaledCoords(e) {
+        if (!screencastMeta || !browserStreamWrapper) {
+            return { x: e.clientX - browserInputOverlay.getBoundingClientRect().left,
+                     y: e.clientY - browserInputOverlay.getBoundingClientRect().top };
+        }
+        // Map from display coordinates to device (viewport) coordinates
+        const rect = browserInputOverlay.getBoundingClientRect();
+        const displayW = rect.width;
+        const displayH = rect.height;
+        const deviceW = screencastMeta.deviceWidth || 1280;
+        const deviceH = screencastMeta.deviceHeight || 720;
+        const scale = screencastMeta.pageScaleFactor || 1;
+
+        // Calculate the actual image display area within the container
+        // object-fit: contain means we need to account for letterboxing
+        const imgAspect = deviceW / deviceH;
+        const containerAspect = displayW / displayH;
+
+        let imgDisplayW, imgDisplayH, offsetX, offsetY;
+        if (imgAspect > containerAspect) {
+            // Image is wider — letterbox top/bottom
+            imgDisplayW = displayW;
+            imgDisplayH = displayW / imgAspect;
+            offsetX = 0;
+            offsetY = (displayH - imgDisplayH) / 2;
+        } else {
+            // Image is taller — letterbox left/right
+            imgDisplayH = displayH;
+            imgDisplayW = displayH * imgAspect;
+            offsetX = (displayW - imgDisplayW) / 2;
+            offsetY = 0;
+        }
+
+        // Map click position to image coordinates, then scale to device
+        const imgX = e.clientX - rect.left - offsetX;
+        const imgY = e.clientY - rect.top - offsetY;
+        const deviceX = Math.round((imgX / imgDisplayW) * deviceW);
+        const deviceY = Math.round((imgY / imgDisplayH) * deviceH);
+
+        return {
+            x: Math.max(0, Math.min(deviceW, deviceX)),
+            y: Math.max(0, Math.min(deviceH, deviceY)),
+        };
+    }
+
+    function sendInput(inputData) {
+        if (!ws || ws.readyState !== WebSocket.OPEN || !isRunning) return;
+        ws.send(JSON.stringify({
+            type: "browser_input",
+            input: inputData,
+        }));
+    }
+
+    function getButton(e) {
+        if (e.button === 0) return "left";
+        if (e.button === 1) return "middle";
+        if (e.button === 2) return "right";
+        return "none";
+    }
+
+    // ── Mouse events ──
+    browserInputOverlay.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        mouseDown = true;
+        const coords = getScaledCoords(e);
+        lastMouseX = coords.x;
+        lastMouseY = coords.y;
+        sendInput({
+            kind: "mouse",
+            mouseType: "mousePressed",
+            x: coords.x,
+            y: coords.y,
+            button: getButton(e),
+            clickCount: 1,
+        });
+    });
+
+    browserInputOverlay.addEventListener("mouseup", (e) => {
+        e.preventDefault();
+        mouseDown = false;
+        const coords = getScaledCoords(e);
+        sendInput({
+            kind: "mouse",
+            mouseType: "mouseReleased",
+            x: coords.x,
+            y: coords.y,
+            button: getButton(e),
+            clickCount: 1,
+        });
+    });
+
+    browserInputOverlay.addEventListener("mousemove", (e) => {
+        if (!mouseDown && !isRunning) return;
+        const coords = getScaledCoords(e);
+        lastMouseX = coords.x;
+        lastMouseY = coords.y;
+        if (mouseDown) {
+            // Only send move events when button is pressed (drag)
+            sendInput({
+                kind: "mouse",
+                mouseType: "mouseMoved",
+                x: coords.x,
+                y: coords.y,
+                button: "left",
+            });
+        }
+    });
+
+    browserInputOverlay.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const coords = getScaledCoords(e);
+        sendInput({
+            kind: "wheel",
+            x: coords.x,
+            y: coords.y,
+            deltaX: Math.round(e.deltaX),
+            deltaY: Math.round(e.deltaY),
+        });
+    }, { passive: false });
+
+    // Prevent context menu on the overlay
+    browserInputOverlay.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+    });
+
+    // ── Keyboard events (captured from document when overlay has focus) ──
+    // Make overlay focusable
+    browserInputOverlay.tabIndex = 0;
+    browserInputOverlay.style.outline = "none";
+
+    browserInputOverlay.addEventListener("keydown", (e) => {
+        if (!isRunning) return;
+        e.preventDefault();
+        sendInput({
+            kind: "key",
+            keyType: "keyDown",
+            key: e.key,
+            code: e.code,
+            text: e.key.length === 1 ? e.key : "",
+            windowsVirtualKeyCode: e.keyCode || 0,
+        });
+        // Also send char event for printable characters
+        if (e.key.length === 1) {
+            sendInput({
+                kind: "key",
+                keyType: "char",
+                key: e.key,
+                code: e.code,
+                text: e.key,
+                windowsVirtualKeyCode: e.keyCode || 0,
+            });
+        }
+    });
+
+    browserInputOverlay.addEventListener("keyup", (e) => {
+        if (!isRunning) return;
+        e.preventDefault();
+        sendInput({
+            kind: "key",
+            keyType: "keyUp",
+            key: e.key,
+            code: e.code,
+            text: "",
+            windowsVirtualKeyCode: e.keyCode || 0,
+        });
+    });
+
+    // Focus the overlay when clicked
+    browserInputOverlay.addEventListener("click", (e) => {
+        browserInputOverlay.focus();
+    });
+
+    // Update cursor when typing
+    browserInputOverlay.addEventListener("keydown", () => {
+        browserInputOverlay.classList.add("typing");
+    });
+    browserInputOverlay.addEventListener("keyup", () => {
+        browserInputOverlay.classList.remove("typing");
+    });
+}
+
+// ============================================================================
 // Toast Notifications
 // ============================================================================
 
@@ -117,7 +388,6 @@ function toast(message, type) {
     el.innerHTML = `<span>${icons[type] || ""}</span> ${escapeHtml(message)}`;
     toastContainer.appendChild(el);
 
-    // Auto-remove after 3.5 seconds
     setTimeout(() => {
         el.classList.add("removing");
         el.addEventListener("animationend", () => el.remove());
@@ -128,12 +398,11 @@ function toast(message, type) {
 // Settings Persistence
 // ============================================================================
 
-// Provider defaults — auto-fill model and base URL when switching
 const PROVIDER_DEFAULTS = {
-    qwen:    { model: "qwen3-vl-8b-instruct", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
-    openai:  { model: "gpt-4o",               baseUrl: "https://api.openai.com/v1" },
+    qwen:     { model: "qwen3-vl-8b-instruct", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    openai:   { model: "gpt-4o",               baseUrl: "https://api.openai.com/v1" },
     anthropic:{ model: "claude-sonnet-4-6",    baseUrl: "https://api.anthropic.com" },
-    local:   { model: "/root/autodl-tmp/Qwen3-VL-8B-Instruc",  baseUrl: "http://127.0.0.1:8000/v1" },
+    local:    { model: "/root/autodl-tmp/Qwen3-VL-8B-Instruc", baseUrl: "http://127.0.0.1:8000/v1" },
 };
 
 function onProviderChange() {
@@ -176,22 +445,6 @@ function getApiKey() {
 }
 
 // ============================================================================
-// Sidebar Persistence
-// ============================================================================
-
-function loadSidebarState() {
-    try {
-        if (localStorage.getItem(SIDEBAR_KEY) === "true") {
-            sidebar.classList.add("collapsed");
-        }
-    } catch { /* ignore */ }
-}
-
-function saveSidebarState() {
-    localStorage.setItem(SIDEBAR_KEY, sidebar.classList.contains("collapsed"));
-}
-
-// ============================================================================
 // WebSocket with Auto-Reconnect
 // ============================================================================
 
@@ -221,7 +474,6 @@ function connectWebSocket() {
         setStatus("");
         ws = null;
 
-        // Auto-reconnect if not running (exponential backoff)
         if (!isRunning) {
             const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
             reconnectAttempts++;
@@ -244,7 +496,6 @@ function connectWebSocket() {
 function startTask(task, url) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         connectWebSocket();
-        // Wait briefly for connection, then send
         const checkAndSend = () => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(buildTaskConfig(task, url)));
@@ -295,10 +546,12 @@ function handleMessage(msg) {
             break;
         case "step":
             hideTyping();
-            // Fall through to finalize the bubble, then re-show typing
             msg.phase = "complete";
             handleStepPhase(msg);
             showTyping();
+            break;
+        case "screencast_frame":
+            handleScreencastFrame(msg);
             break;
         case "done":
             hideTyping();
@@ -326,18 +579,26 @@ function handleStepPhase(msg) {
     const stepId = "step-" + msg.step;
     let bubble = document.getElementById(stepId);
 
-    // Phase: perceive → create bubble with screenshot
+    // Phase: perceive → update browser panel + create bubble
     if (msg.phase === "perceive") {
         stepTimers[msg.step] = { perceive: Date.now() };
+        // Only update browser panel with agent screenshot if screencast is not active
+        // (screencast provides live streaming, agent screenshots have SoM annotations)
+        if (!isScreencastActive) {
+            updateBrowserPanel(msg.screenshot, null, msg.step, msg.elements);
+        } else {
+            // Still update element count in footer (screencast doesn't know about elements)
+            browserElemCount.textContent = msg.elements ? `${msg.elements} 个可交互元素` : "";
+        }
         if (!bubble) {
-            bubble = createStepBubble(msg.step, msg.screenshot, msg.elements);
+            bubble = createStepBubble(msg.step, null, msg.elements);
             chatMessages.appendChild(bubble);
         }
         scrollToBottom();
         return;
     }
 
-    // If bubble doesn't exist yet (phase arrived before perceive), create placeholder
+    // If bubble doesn't exist yet, create placeholder
     if (!bubble) {
         bubble = createStepBubble(msg.step, null, 0);
         chatMessages.appendChild(bubble);
@@ -345,16 +606,16 @@ function handleStepPhase(msg) {
 
     const phaseEl = bubble.querySelector(".step-phases");
 
-    // Phase: reasoning → show thinking animation
+    // Phase: reasoning
     if (msg.phase === "reasoning") {
         if (stepTimers[msg.step]) {
             stepTimers[msg.step].reasoning = Date.now();
-            stepTimers[msg.step]._phaseStart = Date.now();  // for live timer display
+            stepTimers[msg.step]._phaseStart = Date.now();
         }
         updatePhaseContent(phaseEl, "reasoning", "🧠", "VLM 思考中...", true);
     }
 
-    // Phase: acting → lock in reasoning duration, record acting start
+    // Phase: acting
     if (msg.phase === "acting") {
         if (stepTimers[msg.step]) {
             const now = Date.now();
@@ -371,19 +632,21 @@ function handleStepPhase(msg) {
         if (msg.value) desc += " · \"" + escapeHtml(String(msg.value)) + "\"";
         updatePhaseContent(phaseEl, "acting", "🖱️", desc, false);
 
-        // Replace screenshot with highlighted version (red box on target)
-        if (msg.highlighted_screenshot) {
-            const img = bubble.querySelector(".step-screenshot");
-            if (img) {
-                img.src = "data:image/png;base64," + msg.highlighted_screenshot;
-                // Add highlight indicator label
-                const existing = bubble.querySelector(".screenshot-label.before");
-                if (existing) existing.textContent = "操作前 🔴 目标";
-            }
+        // Update browser panel with highlighted screenshot (only if screencast not active)
+        if (msg.highlighted_screenshot && !isScreencastActive) {
+            updateBrowserPanel(msg.highlighted_screenshot, null, msg.step, null);
+        }
+
+        // Update step bubble screenshot to highlighted version
+        const img = bubble.querySelector(".step-screenshot");
+        if (img && msg.highlighted_screenshot) {
+            img.src = "data:image/png;base64," + msg.highlighted_screenshot;
+            const existing = bubble.querySelector(".screenshot-label.before");
+            if (existing) existing.textContent = "操作前 🔴 目标";
         }
     }
 
-    // Phase: verifying → lock in acting duration, record verifying start
+    // Phase: verifying
     if (msg.phase === "verifying") {
         if (stepTimers[msg.step]) {
             const now = Date.now();
@@ -401,6 +664,10 @@ function handleStepPhase(msg) {
     if (msg.phase !== "perceive" && msg.phase !== "reasoning" &&
         msg.phase !== "acting" && msg.phase !== "verifying") {
         finalizeStepBubble(bubble, msg);
+        // Update browser panel with post-action screenshot (only if screencast not active)
+        if (msg.post_screenshot && !isScreencastActive) {
+            updateBrowserPanel(msg.post_screenshot, null, msg.step, null);
+        }
     }
 
     scrollToBottom();
@@ -430,7 +697,6 @@ function createStepBubble(step, screenshot, elements) {
 }
 
 function updatePhaseContent(container, phaseClass, icon, text, showTimer) {
-    // Replace all phase content
     let html = `<div class="step-phase ${phaseClass}">`;
     html += `<span class="phase-icon">${icon}</span>`;
     html += `<span class="phase-text">${escapeHtml(text)}</span>`;
@@ -440,13 +706,12 @@ function updatePhaseContent(container, phaseClass, icon, text, showTimer) {
     html += `</div>`;
     container.innerHTML = html;
 
-    // Start live timer
     if (showTimer) {
         const timerEl = container.querySelector(".phase-timer");
         if (timerEl) {
             const start = Date.now();
             const update = () => {
-                if (!timerEl.parentElement) return;  // Element removed
+                if (!timerEl.parentElement) return;
                 const elapsed = ((Date.now() - start) / 1000).toFixed(1);
                 timerEl.textContent = elapsed + "s";
                 requestAnimationFrame(update);
@@ -459,13 +724,12 @@ function updatePhaseContent(container, phaseClass, icon, text, showTimer) {
 function finalizeStepBubble(bubble, msg) {
     const timers = stepTimers[msg.step] || {};
 
-    // Lock in verifying duration
     if (timers.verifying && !timers.verifyingDuration) {
         timers.verifyingDuration = ((Date.now() - timers.verifying) / 1000).toFixed(1);
     }
 
-    const vt = timers.reasoningDuration ? timers.reasoningDuration + "s" : null;
-    const at = timers.actingDuration ? timers.actingDuration + "s" : null;
+    const vt  = timers.reasoningDuration ? timers.reasoningDuration + "s" : null;
+    const at  = timers.actingDuration ? timers.actingDuration + "s" : null;
     const vft = timers.verifyingDuration ? timers.verifyingDuration + "s" : null;
 
     // Step header with action tag
@@ -478,7 +742,6 @@ function finalizeStepBubble(bubble, msg) {
         `;
     }
 
-    // Add detail
     const bubbleEl = bubble.querySelector(".bubble");
     const phasesEl = bubble.querySelector(".step-phases");
     let detailHtml = "";
@@ -486,12 +749,14 @@ function finalizeStepBubble(bubble, msg) {
         detailHtml += `<div class="step-detail">${escapeHtml(msg.description)}</div>`;
     }
 
-    // Post screenshot
-    if (msg.post_screenshot) {
+    // Post screenshot comparison (compact, since browser panel shows it live)
+    if (msg.post_screenshot && msg.screenshot) {
         detailHtml += `<div class="screenshot-compare">`;
         detailHtml += `<div class="screenshot-side"><span class="screenshot-label before">操作前</span><img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="操作前" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
         detailHtml += `<div class="screenshot-side"><span class="screenshot-label after">操作后</span><img class="step-screenshot" src="data:image/png;base64,${msg.post_screenshot}" alt="操作后" onclick="openLightbox(this.src)" loading="lazy" /></div>`;
         detailHtml += `</div>`;
+    } else if (msg.screenshot && !msg.post_screenshot) {
+        detailHtml += `<img class="step-screenshot" src="data:image/png;base64,${msg.screenshot}" alt="Step ${msg.step}" onclick="openLightbox(this.src)" loading="lazy" />`;
     }
 
     // Verification result
@@ -529,7 +794,6 @@ function finalizeStepBubble(bubble, msg) {
 
     detailHtml += `<div class="msg-time">${nowTime()}</div>`;
 
-    // Replace phases with final content
     if (phasesEl) {
         phasesEl.outerHTML = detailHtml;
     } else if (bubbleEl) {
@@ -565,6 +829,10 @@ function addUserMessage(task, url) {
         </div>
     `;
     chatMessages.appendChild(div);
+    // Update task indicator in top bar
+    taskIndicator.textContent = task.length > 50 ? task.substring(0, 48) + "..." : task;
+    // Update browser URL
+    browserUrl.textContent = url;
     scrollToBottom();
 }
 
@@ -609,6 +877,10 @@ function addCaptchaMessage(msg) {
         </div>
     `;
     chatMessages.appendChild(div);
+    // Also show captcha screenshot in browser panel
+    if (msg.screenshot) {
+        updateBrowserPanel(msg.screenshot, null, null, null);
+    }
     scrollToBottom();
 }
 
@@ -616,8 +888,83 @@ function continueTask(btn) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "continue" }));
     if (btn) { btn.disabled = true; btn.textContent = "⏳ 等待中..."; }
-    // Disable all other continue buttons too (previous CAPTCHA bubbles)
     document.querySelectorAll(".btn-continue").forEach(b => { b.disabled = true; });
+}
+
+// ============================================================================
+// Sidebar (Slide-over)
+// ============================================================================
+
+function openSidebar() {
+    sidebarOverlay.classList.remove("hidden");
+}
+
+function closeSidebar() {
+    sidebarOverlay.classList.add("hidden");
+}
+
+// ============================================================================
+// Browser Panel Resize
+// ============================================================================
+
+function initResizeHandle() {
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    const handle = browserPanel;
+    if (!handle) return;
+
+    handle.addEventListener("mousedown", (e) => {
+        // Only trigger resize when clicking on the right edge area (after pseudo-element)
+        const rect = handle.getBoundingClientRect();
+        const edgeX = rect.right;
+        if (Math.abs(e.clientX - edgeX) > 8) return; // Not on the edge
+
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = rect.width;
+        handle.classList.add("resizing");
+        document.body.classList.add("resizing");
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+
+        e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+        if (!isResizing) return;
+        const delta = e.clientX - startX;
+        const newWidth = startWidth + delta;
+        // Clamp between 280px and 55% of viewport
+        const minW = 280;
+        const maxW = window.innerWidth * 0.55;
+        const clamped = Math.max(minW, Math.min(maxW, newWidth));
+        browserPanel.style.width = clamped + "px";
+        browserPanel.style.minWidth = "0";
+        browserPanel.style.maxWidth = "none";
+    });
+
+    document.addEventListener("mouseup", () => {
+        if (!isResizing) return;
+        isResizing = false;
+        handle.classList.remove("resizing");
+        document.body.classList.remove("resizing");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+    });
+
+    // Also handle the cursor style when hovering over the edge
+    handle.addEventListener("mousemove", (e) => {
+        if (isResizing) return;
+        const rect = handle.getBoundingClientRect();
+        const edgeX = rect.right;
+        if (Math.abs(e.clientX - edgeX) <= 8) {
+            handle.style.cursor = "col-resize";
+        } else {
+            handle.style.cursor = "";
+        }
+    });
 }
 
 // ============================================================================
@@ -644,7 +991,7 @@ function handleSend() {
 
     currentTask = { task, url };
 
-    // Clear old agent messages + reset state for new task
+    // Clear old agent messages
     const oldMessages = chatMessages.querySelectorAll(
         ".message.agent, .message.result, .message.captcha"
     );
@@ -652,6 +999,10 @@ function handleSend() {
     for (const key of Object.keys(stepTimers)) {
         delete stepTimers[key];
     }
+
+    // Reset browser panel for new task
+    resetBrowserPanel();
+    browserUrl.textContent = url;
 
     addUserMessage(task, url);
     saveSettings();
@@ -666,7 +1017,6 @@ function openLightbox(src) {
 
 function closeLightbox() {
     lightbox.classList.add("hidden");
-    // Delay clearing src to allow fade-out animation
     setTimeout(() => { lightboxImg.src = ""; }, 300);
 }
 
@@ -683,7 +1033,6 @@ taskInput.addEventListener("keydown", (e) => {
     }
 });
 
-// Ctrl+Enter also sends
 taskInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.ctrlKey) {
         e.preventDefault();
@@ -696,16 +1045,33 @@ btnAdvanced.addEventListener("click", () => {
     btnAdvanced.classList.toggle("active");
 });
 
+/* Sidebar toggle */
+btnToggleSidebar.addEventListener("click", openSidebar);
+btnCloseSidebar.addEventListener("click", closeSidebar);
+sidebarOverlay.addEventListener("click", (e) => {
+    if (e.target === sidebarOverlay) closeSidebar();
+});
+
+/* New task */
 btnNewTask.addEventListener("click", () => {
     taskInput.value = "";
     urlInput.value = "https://example.com";
     taskInput.focus();
     for (const key of Object.keys(stepTimers)) { delete stepTimers[key]; }
+    taskIndicator.textContent = "就绪";
+    resetBrowserPanel();
     chatMessages.innerHTML = `
         <div class="welcome-message" id="welcome-message">
-            <div class="welcome-icon">🤖</div>
+            <div class="welcome-icon">
+                <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                    <line x1="9" y1="9" x2="9.01" y2="9"/>
+                    <line x1="15" y1="9" x2="15.01" y2="9"/>
+                </svg>
+            </div>
             <h3>欢迎使用 VisuMark Agent</h3>
-            <p>在下方输入任务描述和目标网址，Agent 将使用视觉语言模型自动操控浏览器完成任务。</p>
+            <p>输入任务描述和目标网址，AI Agent 将自动操控浏览器完成任务。<br/>左侧面板将实时展示浏览器画面。</p>
             <div class="welcome-examples">
                 <h4>示例任务</h4>
                 <button class="example-chip" data-task="中山大学广州校区南校园在哪里" data-url="https://www.bing.com">🏫 中山大学南校园</button>
@@ -718,29 +1084,11 @@ btnNewTask.addEventListener("click", () => {
                 <button class="example-chip" data-task="2026年世界杯在哪个国家举办" data-url="https://www.bing.com">⚽ 2026世界杯举办地</button>
                 <button class="example-chip" data-task="B站番剧排行榜第一名是什么" data-url="https://www.bing.com">📺 B站番剧排行榜</button>
                 <button class="example-chip" data-task="最新的特斯拉Model 3价格是多少" data-url="https://www.bing.com">🚗 特斯拉Model 3价格</button>
-                <button class="example-chip" data-task="帮我查一下深圳今天有什么演唱会" data-url="https://www.bing.com">🎵 深圳今日演唱会</button>
-                <button class="example-chip" data-task="Python和JavaScript哪个更适合初学者" data-url="https://www.bing.com">💻 编程语言对比</button>
-                <button class="example-chip" data-task="这个网页的标题和描述是什么" data-url="https://example.com">📄 读取网页信息</button>
                 <button class="example-chip" data-task="翻译 'Hello World' 到中文" data-url="https://fanyi.baidu.com">🌐 百度翻译</button>
-                <button class="example-chip" data-task="查询 serial 这个单词的含义" data-url="https://dict.cn">📖 词典查词</button>
-                <button class="example-chip" data-task="今天的NBA比赛结果是什么" data-url="https://www.baidu.com">🏀 NBA比赛结果</button>
-                <button class="example-chip" data-task="深圳到广州的高铁时刻表" data-url="https://www.baidu.com">🚄 高铁时刻表</button>
-                <button class="example-chip" data-task="豆瓣电影TOP250第一名是什么" data-url="https://www.baidu.com">🎬 豆瓣电影TOP250</button>
-                <button class="example-chip" data-task="查询人民币对美元的汇率" data-url="https://www.baidu.com">💰 汇率查询</button>
-                <button class="example-chip" data-task="打开百度翻译，把'人工智能正在改变世界'翻译成英文" data-url="https://fanyi.baidu.com">🌐 翻译整句到英文</button>
-                <button class="example-chip" data-task="查询今天黄金的实时价格（人民币/克）" data-url="https://www.baidu.com">🥇 实时金价查询</button>
                 <button class="example-chip" data-task="搜索从深圳北到广州南的高铁，告诉我最早一班的时间" data-url="https://www.baidu.com">🚄 高铁最早班次</button>
-                <button class="example-chip" data-task="本周末深圳天气怎么样？适合出门吗" data-url="https://www.bing.com">🌦️ 周末天气+出行建议</button>
-                <button class="example-chip" data-task="今天有什么热门新闻" data-url="https://www.baidu.com">📰 今日热门新闻</button>
                 <button class="example-chip" data-task="搜索'周杰伦'，找到他的出生日期和代表作前3首" data-url="https://www.baidu.com">🎤 明星信息查询</button>
-                <button class="example-chip" data-task="彭博社今天的头条新闻标题是什么" data-url="https://www.bloomberg.com">📈 彭博社头条</button>
-                <button class="example-chip" data-task="搜索南昌现在的天气，然后查一下南昌到广州的火车票，告诉我最早的一班是几点" data-url="https://www.bing.com">🌤️🚄 天气+火车票组合查询</button>
                 <button class="example-chip" data-task="分别搜索茅台和腾讯的最新股价，比较哪个涨幅更高" data-url="https://www.bing.com">📊 股票对比查询</button>
-                <button class="example-chip" data-task="搜索iPhone 16 Pro Max和三Samsung Galaxy S25 Ultra的详细参数，告诉我哪一个屏幕更大" data-url="https://www.bing.com">📱 手机参数对比</button>
-                <button class="example-chip" data-task="查询今天人民币对美元、欧元、日元三种货币的汇率" data-url="https://www.bing.com">💱 多币种汇率查询</button>
-                <button class="example-chip" data-task="搜索'阿尔伯特·爱因斯坦'，然后进入他的维基百科页面，告诉我他的出生地和逝世年份" data-url="https://www.bing.com">🔬 维基百科信息提取</button>
-                <button class="example-chip" data-task="在百度翻译中输入'I love programming'翻译成中文，再翻译成日文" data-url="https://fanyi.baidu.com">🌐 多语种翻译</button>
-                <button class="example-chip" data-task="搜索暗黑破坏神4，看看它在哪个平台可以玩，Metacritic评分是多少" data-url="https://www.bing.com">🎮 游戏信息查询</button>
+                <button class="example-chip" data-task="搜索iPhone 16 Pro Max和Samsung Galaxy S25 Ultra的详细参数，告诉我哪一个屏幕更大" data-url="https://www.bing.com">📱 手机参数对比</button>
             </div>
         </div>
         <div class="typing-indicator" id="typing-indicator">
@@ -751,23 +1099,26 @@ btnNewTask.addEventListener("click", () => {
             </div>
         </div>
     `;
-    // Re-bind example chips
     $$(".example-chip").forEach(bindExampleChip);
     toast("新任务已就绪", "info");
 });
 
-btnToggleSidebar.addEventListener("click", () => {
-    sidebar.classList.toggle("collapsed");
-    saveSidebarState();
+/* Browser screenshot click → lightbox */
+browserScreenshot.addEventListener("click", () => {
+    if (browserScreenshot.src) openLightbox(browserScreenshot.src);
 });
 
+/* Lightbox */
 lightboxClose.addEventListener("click", closeLightbox);
 lightbox.addEventListener("click", (e) => {
     if (e.target === lightbox) closeLightbox();
 });
 
 document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeLightbox();
+    if (e.key === "Escape") {
+        closeLightbox();
+        closeSidebar();
+    }
 
     // Ctrl+K to focus task input
     if (e.key === "k" && e.ctrlKey && !isRunning) {
@@ -778,10 +1129,12 @@ document.addEventListener("keydown", (e) => {
     // Ctrl+B to toggle sidebar
     if (e.key === "b" && e.ctrlKey) {
         e.preventDefault();
-        sidebar.classList.toggle("collapsed");
-        saveSidebarState();
+        if (sidebarOverlay.classList.contains("hidden")) {
+            openSidebar();
+        } else {
+            closeSidebar();
+        }
     }
-
 });
 
 // Example chips binding
@@ -815,11 +1168,11 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-
 // ============================================================================
 // Init
 // ============================================================================
 
 loadSettings();
-loadSidebarState();
 connectWebSocket();
+initResizeHandle();
+initBrowserInputCapture();
