@@ -1,0 +1,3 @@
+\contentsline {section}{\numberline {一}实验评测与分析}{2}{section.1}%
+\contentsline {subsection}{\numberline {1}HTML输入模式下的性能测评}{3}{subsection.1.1}%
+\contentsline {subsection}{\numberline {2}SoM输入模式下的性能测评}{3}{subsection.1.2}%

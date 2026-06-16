@@ -73,7 +73,6 @@ The user's task is a QUESTION. Your job is to FIND the answer, then STOP.
    There are maybe brief info about each element (text, aria-label, title, alt), you should use that to help identify the correct element.
    When boxes are close together and labels overlap, use the COLOR to tell which label belongs to which box — the label's background color always matches its bounding box color.
 2. If the target element is visible with a number, use click/type/select with that number.
-   **Before TYPEing into any search box or input field, you MUST CLICK it first.** Do NOT TYPE without clicking — the field may not be focused.
 3. If you need to find something not visible, use scroll down first.
 4. If genuinely stuck, use "fail" and explain why.
 5. The "element_id" field must be the NUMBER on the screenshot (e.g. "3").

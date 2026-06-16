@@ -1,0 +1,251 @@
+\documentclass{SYSUReport}
+\usepackage{tabularx} % 在导言区添加此行
+\usepackage{array}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{svg}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fontspec}
+% --- 定义颜色 (模仿 VS Code 或常见 IDE) ---
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\definecolor{codeblue}{rgb}{0.1,0.1,0.9}
+
+% --- 通用设置 ---
+\lstset{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\small,          % 使用等宽字体
+    breakatwhitespace=false,         
+    breaklines=true,                 % 自动折行
+    captionpos=b,                    % 标题在下
+    keepspaces=true,                 
+    numbers=none,                    % 行号在左
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=4,
+    frame=single,                    % 代码框
+    rulecolor=\color{black}          % 边框颜色
+}
+
+% --- Python 特定样式 ---
+\lstdefinestyle{pythonstyle}{
+    language=Python,
+    morekeywords={self, cls, @property}, % 可以添加额外的关键字
+    deletekeywords={list,dict}           % 如果不想高亮某些词可以删除
+}
+
+% --- C 特定样式 ---
+\lstdefinestyle{cstyle}{
+    language=C,
+    morekeywords={printf, scanf, uint32_t, uint16_t, size_t}, % 添加 C 常用函数或类型
+}
+% --- 终端/Shell颜色定义 ---
+\definecolor{termbackslash}{rgb}{0.2,0.2,0.2} % 深灰色背景
+\definecolor{termwhite}{rgb}{0.94,0.94,0.94}  % 接近白色的文字
+
+% --- Terminal 特定样式 ---
+\lstdefinestyle{termstyle}{
+    language=bash,
+    backgroundcolor=\color{termbackslash}, % 使用深色背景模拟终端
+    basicstyle=\ttfamily\small\color{termwhite}, % 白色文字
+    keywordstyle=\color{cyan}\bfseries,       % 指令用青色高亮
+    commentstyle=\color{gray},
+    stringstyle=\color{codepurple},
+    numbers=none,                             % 终端通常不需要行号
+    showstringspaces=false,
+    frame=single,                             % 单线框
+    rulecolor=\color{gray},
+    breaklines=true,
+    % 定义常用的 Linux/开发指令
+    morekeywords={gcc, g++, python3, make, cmake, ./, mpirun, mpicc, ls, cd, sudo, pip},
+    % 自动高亮提示符 $ 符号
+    literate={\$}{{\textcolor{green}{\$}}}1,
+}
+\headr{多模态大模型原理与应用}
+\lessonTitle{多模态大模型原理与应用课程报告}
+\reportTitle{基于视觉理解与自动操作的智能浏览器助手}
+\stuname{}
+\stuid{}
+\inst{计算机学院}
+\major{计算机科学与技术}
+\date{}
+\lstset{ 
+    language=SQL,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    showstringspaces=false,
+    breaklines=true,
+    numbers=none,
+    frame=single
+}
+\lstdefinelanguage{SQL}{
+  morekeywords={SELECT, FROM, WHERE, ORDER, BY, GROUP, HAVING, INSERT, INTO, VALUES,
+                UPDATE, SET, DELETE, CREATE, TABLE, DROP, ALTER, AS, JOIN, LEFT,
+                RIGHT, INNER, OUTER, ON, LIMIT, OFFSET, DISTINCT, COUNT, SUM,
+                AVG, MAX, MIN, LIKE, IN, NOT, NULL, IS, EXISTS, CASE, WHEN, THEN,
+                ELSE, END, AND, OR, BETWEEN},
+  sensitive=false,
+  alsoletter={_},
+  morecomment=[l]{--},
+  morecomment=[s]{/*}{*/},
+  morestring=[d]',
+  morestring=[d]"
+}
+\lstdefinelanguage{Python}{
+  morekeywords={%
+    and, as, assert, async, await, break, class, continue, def, del, elif,
+    else, except, False, finally, for, from, global, if, import, in, is,
+    lambda, None, nonlocal, not, or, pass, raise, return, True, try, while,
+    with, yield, self, print, len, range, enumerate, zip, map, filter,
+    isinstance, type, str, int, float, list, dict, set, tuple, open, close
+  },
+  sensitive=true,
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+  morestring=[s]{"""}{"""},   % 支持三引号字符串
+  morestring=[s]{'''}{'''}
+}
+\lstdefinelanguage{C++}{
+  morekeywords={%
+    alignas, alignof, and, and_eq, asm, auto, bitand, bitor, bool, break,
+    case, catch, char, char8_t, char16_t, char32_t, class, compl, const,
+    consteval, constexpr, const_cast, continue, co_await, co_return, co_yield,
+    decltype, default, delete, do, double, dynamic_cast, else, enum, explicit,
+    export, extern, false, float, for, friend, goto, if, inline, int, long,
+    mutable, namespace, new, noexcept, not, not_eq, nullptr, operator, or,
+    or_eq, private, protected, public, register, reinterpret_cast, requires,
+    return, short, signed, sizeof, static, static_assert, static_cast, struct,
+    switch, template, this, thread_local, throw, true, try, typedef, typeid,
+    typename, union, unsigned, using, virtual, void, volatile, wchar_t,
+    while, xor, xor_eq,
+    % 常用标准库函数/类型（可选）
+    cout, cin, endl, string, vector, map, set, pair, make_pair, size_t,
+    size, push_back, emplace_back, begin, end, find, sort, swap, move
+  },
+  sensitive=true,
+  alsoletter={_},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]',
+  morestring=[s]{R"xxx(}{)xxx"} % 支持原始字符串字面量（简化处理，实际需更复杂规则）
+}
+\lstdefinelanguage{Java}{
+  morekeywords={%
+    abstract, assert, boolean, break, byte, case, catch, char, class,
+    const, continue, default, do, double, else, enum, extends, final,
+    finally, float, for, goto, if, implements, import, instanceof, int,
+    interface, long, native, new, package, private, protected, public,
+    return, short, static, strictfp, super, switch, synchronized, this,
+    throw, throws, transient, try, void, volatile, while, false, null, true
+  },
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]'
+}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\begin{document} %在document环境中撰写文档
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 封面及目录，无需改动此处代码
+% 面页，需要在导言区用\sysucseset命令填写基本信息
+\cover
+% 目录
+%\tableofcontents
+\cleardoublepage
+% 设置正文页眉页脚格式，并重新设置页码为1
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\fontsize{12}{18}\selectfont
+\tableofcontents
+\section{实验评测与分析}
+针对项目模型的SoM输入与HTML输入模式分别设计了评测实验。所有本地模型均在一台RTX 3090 24GB $\times 1$，内存60GB的计算机上运行，并使用Qwen 3VL-8B-Instruct作为本地测试模型,使用API调用Qwen3.7-max测试。
+选取任务成功率(SR)、元素准确率(Ele. Acc)、任务单步操作的F1分数(OP.F1)、任务单步成功率(Step SR)以及单步平均耗时作为评价Web Agent性能的标准。
+其中，Ele. Acc表示各任务内选择正确网页元素的步数比例跨任务的均值，Op.F1分数表示单步操作的F1值，Step SR表示各任务内元素与操作均正确的步数比例跨任务的均值，SR表示所有步骤均成功执行的任务数占数据集总任务数的比例。
+
+\begin{align*}
+    \text{Ele.Acc} &= \frac{1}{M} \sum_{i=1}^{M} \frac{1}{N_i} \sum_{j=1}^{N_i} \mathbb{I}(\hat{e}_{i,j} \in S_{acc}(e_{i,j})) \\[6pt]
+    \text{Op.F1}_{i,j} &= \mathbb{I}\bigl(\hat{op}_{i,j} \in S_{op}(op_{i,j})\bigr) \times
+                         \begin{cases}
+                            1 & op_{i,j} = \text{CLICK} \\[4pt]
+                            \text{F1}(v_{i,j}, \hat{v}_{i,j}) & op_{i,j} \in \{\text{TYPE}, \text{SELECT}\}
+                         \end{cases} \\[4pt]
+    \text{Step SR} &= \frac{1}{M} \sum_{i=1}^{M} \frac{1}{N_i} \sum_{j=1}^{N_i} \Bigl[ \mathbb{I}(\hat{e}_{i,j} \in S_{acc}(e_{i,j})) \times \mathbb{I}(\text{Op.F1}_{i,j} = 1) \Bigr] \\[6pt]
+    \text{SR}_i &= \prod_{j=1}^{N_i} \Bigl[ \mathbb{I}(\hat{e}_{i,j} \in S_{acc}(e_{i,j})) \times \mathbb{I}(\text{Op.F1}_{i,j} = 1) \Bigr]
+\end{align*}
+其中$M$为数据集内的总任务数，$N_{i}$为第$i$个任务的步骤数，$e_{i,j},\hat{e}_{i,j}$分别为第$i$个任务第$j$步中Ground Truth的等价网页元素集合和Agent预测的网页元素，$op_{i,j} \in \{\text{CLICK},\text{TYPE},\text{SELECT}\}$为Ground Truth操作类型，$\hat{op}_{i,j}$为预测操作类型，$v_{i,j},\hat{v}_{i,j}$分别为Ground Truth和预测的操作值。
+$S_{op}(\text{CLICK})=\{\text{CLICK}, \text{HOVER}, \text{PRESS}\}$为Mind2Web中将$\text{HOVER}$和$\text{PRESS\_ENTER}$映射至$\text{CLICK}$的等价操作集合；$\text{F1}(\cdot,\cdot)$为F1分数。
+
+\subsection{HTML输入模式下的性能测评}
+选用Mind2Web数据集对模型进行评测。Mind2Web数据集是一个大规模的Web Agent基准数据集,将真实世界的静态网页作为数据,具有1,341个不同任务和46步的最长任务步数，在Web Agent领域被广泛用于测试模型的页面理解与执行能力。
+
+我们对Mind2Web数据集提供的评测方法进行了修改。在Mind2Web数据集提供的HTML应用过滤规则只保留可交互元素后，使用一个基于Bert2实现的预训练模型all-MiniLM-L6-v2对剩余候选元素进行排序并交给VLM进行选择，并给出对应的操作类型和元素，最后计算Ele. Acc,OP.F1,Step SR和SR。
+\begin{table}[H]
+\centering
+\small
+\caption{HTML输入模式下模型在Mind2Web数据集上的性能}
+\label{tab:html_perf}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l|rrrr|rrrr|rrrr|r}
+\toprule
+& \multicolumn{4}{c}{Cross-Task} & \multicolumn{4}{c}{Cross-Website} & \multicolumn{4}{c}{Cross-Domain} & \\
+\cmidrule(lr){2-5} \cmidrule(lr){6-9} \cmidrule(lr){10-13}
+& EA & OP & SS & SR & EA & OP & SS & SR & EA & OP & SS & SR & Time(s) \\
+\midrule
+Qwen3-VL-8B & 41.9 & 84.0 & 33.9 & 1.5 & 32.0 & 78.0 & 26.4 & 1.0 & 36.0 & 83.0 & 28.0 & 3.0 & 1.3 \\
+Qwen3.7-max & 64.6 & 80.5 & 52.0 & 8.7 & 57.9 & 81.3 & 42.4 & 6.2 & 55.6 & 81.9 & 43.8 & 7.3 & 14.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+由表1可以看出，Qwen3.7-max在元素定位上显著优于Qwen3-VL-8B，元素准确率平均比Qwen3-VL-8B提高了$22.7\%$，最终导致更高的单步成功率与任务成功率。但Qwen3-VL-8B作为小模型具有快速响应与低成本
+的优势，在相对较好的网页操作性能和较快的响应时间中取得了平衡。Qwen3.7-max的参数量过大，虽然准确率更高但响应时间是Qwen3-VL-8B的11倍，不具有实时性。
+\subsection{SoM输入模式下的性能测评}
+
+为评估SoM视觉输入模式在真实网页场景下的表现，自行设计了包含30个任务的测试集，全部基于可公开访问的真实网站。测试任务覆盖多种难度与应用场景，代表性任务包括：搜索"中山大学广州校区南校园"并返回地址、打开哔哩哔哩首页点击第一个视频后返回作者头像、登录QQ邮箱并向指定地址发送端午祝福邮件等。完整任务列表见附录。所有测试均使用Qwen 3VL-8B-Instruct模型，在有头浏览器模式下运行，每个任务至少重复运行3次以减小随机性。
+
+由于自建测试集缺少Mind2Web数据集中的Ground Truth标注（如真实操作序列和正负候选元素），无法直接计算Ele. Acc和Op.F1等微观指标。因此针对真实网页场景，定义以下两项宏观指标评价Agent的任务完成能力：
+
+\begin{align*}
+    \text{SR} &= \frac{S}{N} \\
+    \text{AvgSteps} &= \frac{1}{S} \sum_{i \in \mathcal{S}} \text{steps}_i
+\end{align*}
+其中$N=30$为测试任务总数，$S$为成功完成（Agent返回正确答案且人工验证通过）的任务数，$\mathcal{S}$为成功任务集合，$\text{steps}_i$为第$i$个任务成功完成时使用的步数。
+
+\begin{table}[H]
+\centering
+\small
+\caption{SoM输入模式与HTML输入模式在自建测试集上的对比}
+\label{tab:som_vs_html}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{l|rr|rr}
+\toprule
+\multirow{2}{*}{模型} & \multicolumn{2}{c|}{SoM输入} & \multicolumn{2}{c}{HTML输入} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+& SR & AvgSteps & SR & AvgSteps \\
+\midrule
+Qwen 3VL-8B & 73.3 & 10.5 & 40.0 & 6.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+由表2可以看出，SoM视觉输入模式相比HTML文本输入模式在真实网页任务上具有显著优势。任务成功率从$40.0\%$提升至$73.3\%$，提升幅度达$83.3\%$。分析任务完成情况发现，HTML输入模式能够成功完成的任务以简单的搜索引擎查询为主（如事实类搜索、天气查询等），一旦任务涉及表单填写、页面跳转、多步交互等复杂操作，成功率显著下降。SoM模式由于能够直观地识别页面布局与元素空间位置，在需要点击特定按钮、填写表单、切换标签页等复杂操作时表现更好。但SoM模式的完成任务平均步数$10.5$步明显高于HTML模式的$6.8$步，这一方面是因为SoM模式成功完成的任务本身更复杂，自然需要更多操作步数；另一方面也与SoM模式下模型倾向于执行更多探索性操作（如下拉滚动、尝试不同元素）有关。
+
+总体而言，SoM输入模式以更多的操作步数为代价，换取了更高的任务完成率与更广泛的任务适用性，在真实网页场景下优于HTML文本输入模式。
+
+\end{document}
