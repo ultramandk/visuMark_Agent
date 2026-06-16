@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2025.2.28)  16 JUN 2026 20:34
+This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2025.2.28)  17 JUN 2026 00:46
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -1156,9 +1156,9 @@ Package fontspec Info: Font family 'SimSun(1)' created for font 'SimSun' with
 
  (./lab4.toc
 LaTeX Font Info:    Font shape `U/lasy/b/n' in size <8> not available
-(Font)              Font shape `U/lasy/m/n' tried instead on input line 1.
+(Font)              Font shape `U/lasy/m/n' tried instead on input line 2.
 LaTeX Font Info:    Font shape `U/lasy/b/n' in size <6> not available
-(Font)              Font shape `U/lasy/m/n' tried instead on input line 1.
+(Font)              Font shape `U/lasy/m/n' tried instead on input line 2.
 )
 \tf@toc=\write5
 \openout5 = `lab4.toc'.
@@ -1182,6 +1182,20 @@ Package fancyhdr Warning: \headheight is too small (12.0pt):
 (fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
 
 [3]
+File: figures/arch_som.png Graphic file (type bmp)
+<figures/arch_som.png>
+
+
+LaTeX Warning: `!h' float specifier changed to `!ht'.
+
+
+Package fancyhdr Warning: \headheight is too small (12.0pt): 
+(fancyhdr)                Make it at least 18.0pt, for example:
+(fancyhdr)                \setlength{\headheight}{18.0pt}.
+(fancyhdr)                You might also make \topmargin smaller to compensate:
+(fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
+
+[4]
 
 Package fontspec Info: Could not resolve font "FangSong/BI" (it probably
 (fontspec)             doesn't exist).
@@ -1205,15 +1219,8 @@ Package fontspec Info: Font family 'FangSong(0)' created for font 'FangSong'
 (fontspec)             <->"FangSong/OT:script=hani;language=dflt;"
 (fontspec)             - 'small caps'  (m/sc) with NFSS spec.: 
 
+Package hyperref Info: bookmark level for unknown lstlisting defaults to 0 on input line 249.
 
-
-Package fancyhdr Warning: \headheight is too small (12.0pt): 
-(fancyhdr)                Make it at least 18.0pt, for example:
-(fancyhdr)                \setlength{\headheight}{18.0pt}.
-(fancyhdr)                You might also make \topmargin smaller to compensate:
-(fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
-
-[4]
 
 Package fancyhdr Warning: \headheight is too small (12.0pt): 
 (fancyhdr)                Make it at least 18.0pt, for example:
@@ -1230,6 +1237,15 @@ Package fancyhdr Warning: \headheight is too small (12.0pt):
 (fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
 
 [6]
+Overfull \hbox (52.31157pt too wide) in paragraph at lines 284--285
+\TU/SimSun(0)/m/n/12 测 层 在 感 知 阶 段 运 行，|  通 过 \TU/TimesNewRoman(0)/m/n/12 JavaScript \TU/SimSun(0)/m/n/12 扫 描 页 面 \TU/TimesNewRoman(0)/m/n/12 DOM \TU/SimSun(0)/m/n/12 中 的 密 码 输 入 框  |（\TU/lmtt/m/n/12 input[type="password"]\TU/SimSun(0)/m/n/12 ） 、|
+ []
+
+
+Overfull \hbox (29.87025pt too wide) in paragraph at lines 290--291
+\TU/TimesNewRoman(0)/b/n/12 VLM \TU/SimSun(0)/b/n/12 调 用 与 响 应 解 析[] \TU/SimSun(0)/m/n/12 推 理 模 块 通 过 \TU/lmtt/m/n/12 ReasonerFactory \TU/SimSun(0)/m/n/12 根 据 配 置 的 \TU/TimesNewRoman(0)/m/n/12 provider \TU/SimSun(0)/m/n/12 名 称  |（\TU/TimesNewRoman(0)/m/n/12 qwen/ope-
+ []
+
 
 Package fancyhdr Warning: \headheight is too small (12.0pt): 
 (fancyhdr)                Make it at least 18.0pt, for example:
@@ -1238,6 +1254,10 @@ Package fancyhdr Warning: \headheight is too small (12.0pt):
 (fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
 
 [7]
+Overfull \hbox (49.9091pt too wide) in paragraph at lines 323--324
+\TU/SimSun(0)/m/n/12 的 错 误 提 示 元 素。|  检 测 目 标 包 括：| \TU/TimesNewRoman(0)/m/n/12 WAI-ARIA \TU/SimSun(0)/m/n/12 标 准 角 色  |（\TU/lmtt/m/n/12 [role="alert"]\TU/SimSun(0)/m/n/12 、| \TU/lmtt/m/n/12 [role="alertdialog"]\TU/SimSun(0)/m/n/12 ） 、|
+ []
+
 
 Package fancyhdr Warning: \headheight is too small (12.0pt): 
 (fancyhdr)                Make it at least 18.0pt, for example:
@@ -1254,6 +1274,9 @@ Package fancyhdr Warning: \headheight is too small (12.0pt):
 (fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
 
 [9]
+File: figures/html_mode.png Graphic file (type bmp)
+<figures/html_mode.png>
+
 
 Package fancyhdr Warning: \headheight is too small (12.0pt): 
 (fancyhdr)                Make it at least 18.0pt, for example:
@@ -1261,7 +1284,47 @@ Package fancyhdr Warning: \headheight is too small (12.0pt):
 (fancyhdr)                You might also make \topmargin smaller to compensate:
 (fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
 
-[10] (./lab4.aux)
+[10]
+
+Package fancyhdr Warning: \headheight is too small (12.0pt): 
+(fancyhdr)                Make it at least 18.0pt, for example:
+(fancyhdr)                \setlength{\headheight}{18.0pt}.
+(fancyhdr)                You might also make \topmargin smaller to compensate:
+(fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
+
+[11]
+
+Package fancyhdr Warning: \headheight is too small (12.0pt): 
+(fancyhdr)                Make it at least 18.0pt, for example:
+(fancyhdr)                \setlength{\headheight}{18.0pt}.
+(fancyhdr)                You might also make \topmargin smaller to compensate:
+(fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
+
+[12]
+
+Package fancyhdr Warning: \headheight is too small (12.0pt): 
+(fancyhdr)                Make it at least 18.0pt, for example:
+(fancyhdr)                \setlength{\headheight}{18.0pt}.
+(fancyhdr)                You might also make \topmargin smaller to compensate:
+(fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
+
+[13]
+
+Package fancyhdr Warning: \headheight is too small (12.0pt): 
+(fancyhdr)                Make it at least 18.0pt, for example:
+(fancyhdr)                \setlength{\headheight}{18.0pt}.
+(fancyhdr)                You might also make \topmargin smaller to compensate:
+(fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
+
+[14]
+
+Package fancyhdr Warning: \headheight is too small (12.0pt): 
+(fancyhdr)                Make it at least 18.0pt, for example:
+(fancyhdr)                \setlength{\headheight}{18.0pt}.
+(fancyhdr)                You might also make \topmargin smaller to compensate:
+(fancyhdr)                \addtolength{\topmargin}{-6.0pt}.
+
+[15] (./lab4.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2022/08/05>
@@ -1271,15 +1334,15 @@ L3 programming layer <2022/08/05>
 LaTeX Font Warning: Some font shapes were not available, defaults substituted.
 
 Package rerunfilecheck Info: File `lab4.out' has not changed.
-(rerunfilecheck)             Checksum: 498D5D82BB2A147E7D67A119977D40BB;1430.
+(rerunfilecheck)             Checksum: 368F0FA6A8F1769CC6DB06455330257A;2274.
  ) 
 Here is how much of TeX's memory you used:
- 34966 strings out of 474773
- 759287 string characters out of 5761289
- 1946842 words of memory out of 5000000
- 56462 multiletter control sequences out of 15000+600000
- 575292 words of font info for 160 fonts, out of 8000000 for 9000
+ 34870 strings out of 474773
+ 760461 string characters out of 5761289
+ 2017842 words of memory out of 5000000
+ 56372 multiletter control sequences out of 15000+600000
+ 575244 words of font info for 154 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
- 107i,16n,111p,1276b,910s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 107i,16n,111p,1276b,1920s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on lab4.xdv (10 pages, 177096 bytes).
+Output written on lab4.xdv (15 pages, 210488 bytes).

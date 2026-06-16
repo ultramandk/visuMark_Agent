@@ -180,6 +180,7 @@
 \fontsize{12}{18}\selectfont
 \tableofcontents
 
+\section{应用背景与任务定义}
 \subsection{应用背景}
 随着互联网的快速发展，网页的样式和信息量都在经历日新月异地增长，为人们完成特定的网页任务带来了挑战。
 在多模态大模型技术成熟的背景下，基于VLM/LLM技术实现的多模态网页Agent能够实现辅助和某种程度地替代人类
@@ -230,72 +231,115 @@
 
 SoM（Set-of-Mark）模式是系统的主要运行模式。该模式将网页截图与可交互元素的视觉标记相结合，使VLM能够直观地看到页面上的可操作元素，并通过引用标记编号来精确指定操作目标。其整体架构如图\ref{fig:arch_som}所示，遵循ReAct（Reasoning + Acting）范式，每步操作分为感知（Perceive）、推理（Reason）、执行（Act）和验证（Verify）四个阶段。
 
-\begin{figure}[htbp]
-\centering
-\begin{tikzpicture}[
-    node distance=0.8cm and 1.5cm,
-    block/.style = {
-        rectangle, draw, thick, rounded corners=3pt,
-        fill=blue!8, drop shadow,
-        text centered, font=\sffamily\footnotesize, minimum width=2.4cm, minimum height=0.8cm
-    },
-    subblock/.style = {
-        rectangle, draw, thin, rounded corners=2pt,
-        fill=gray!5, font=\sffamily\scriptsize, minimum width=2.2cm, minimum height=0.55cm
-    },
-    arrow/.style = {thick, -{Stealth}},
-    label/.style = {font=\sffamily\scriptsize}
-]
-
-% 四阶段主节点
-\node (perceive) [block, fill=yellow!10] {1. 感知 (Perceive)};
-\node (reason) [block, fill=orange!10, below=0.5cm of perceive] {2. 推理 (Reason)};
-\node (act) [block, fill=green!10, below=0.5cm of reason] {3. 执行 (Act)};
-\node (verify) [block, fill=red!10, below=0.5cm of act] {4. 验证 (Verify)};
-
-% 感知子模块
-\node (extract) [subblock, right=0.3cm of perceive, xshift=2.8cm] {ElementExtractor};
-\node (marker) [subblock, below=0.2cm of extract] {SoMMarker};
-\node (bridge) [subblock, below=0.2cm of marker] {DOMBridge};
-
-% 推理子模块
-\node (vlm_call) [subblock, right=0.3cm of reason, xshift=2.8cm] {VLM调用 (OpenAI/Qwen等)};
-\node (parser) [subblock, below=0.2cm of vlm_call] {ActionParser};
-
-% 执行子模块
-\node (playwright) [subblock, right=0.3cm of act, xshift=2.8cm] {Playwright浏览器};
-\node (executor) [subblock, below=0.2cm of playwright] {ActionExecutor (4层回退)};
-
-% 验证子模块
-\node (pixel_diff) [subblock, right=0.3cm of verify, xshift=2.8cm] {像素对比 (全图)};
-\node (dom_check) [subblock, below=0.2cm of pixel_diff] {DOM错误检测};
-\node (vlm_verify) [subblock, below=0.2cm of dom_check] {VLM验证 (可选)};
-
-% 阶段间主流程
-\draw[arrow] (perceive) -- (reason);
-\draw[arrow] (reason) -- (act);
-\draw[arrow] (act) -- (verify);
-\draw[arrow, dashed, blue] (verify.west) -- ++(-1.2,0) |- (perceive.west)
-    node[pos=0.5, left, label] {下一轮};
-
-% 输入输出
-\node (input_label) [font=\sffamily\tiny, text=gray, left=0cm of perceive, xshift=-2.0cm] {任务描述 + URL};
-\node (output_label) [font=\sffamily\tiny, text=gray, left=0cm of verify, xshift=-2.0cm] {Answer / 操作};
-\draw[arrow, gray!50] (input_label) -- (perceive);
-\draw[arrow, gray!50] (verify) -- (output_label);
-
-\end{tikzpicture}
-\caption{SoM模式的ReAct循环架构}
-\label{fig:arch_som}
+\begin{figure}[!h]
+    \centering
+    \includegraphics[width=0.9\textwidth]{arch_som.png}
+    \caption{SoM视觉输入模式的系统架构}
+    \label{fig:arch_som}
 \end{figure}
 
-\textbf{感知阶段（Perceive）}负责将当前网页状态转化为VLM可理解的表示。首先通过Playwright截取当前页面的全页面截图，同时通过\texttt{ElementExtractor}模块使用CSS选择器（覆盖\texttt{<button>}、\texttt{<a>}、\texttt{<input>}等原生交互标签，以及\texttt{[role]}、\texttt{[aria-label]}、\texttt{[data-a11y]}等富交互属性）提取页面中所有可交互的DOM元素。对于现代SPA框架中无任何HTML属性的按钮，通过检测\texttt{cursor: pointer}计算样式作为补充识别手段。元素经过可见性、尺寸（最小4px²）、disabled和pointer-events过滤后，由\texttt{SoMMarker}模块在截图上绘制带编号的彩色矩形边框（12色调色板）。同时\texttt{DOMBridge}维护SoM编号到CSS选择器及Playwright定位器的双向映射，使后续执行阶段能将VLM输出的元素编号解析为可点击的DOM元素。对于旧版QQ邮箱等使用frameset架构的网页，感知阶段会遍历所有\texttt{<iframe>}子文档并修正坐标偏移，确保标注位置正确。
+\subsubsection{感知阶段（Perceive）}
 
-\textbf{推理阶段（Reason）}将SoM标注后的截图以base64 JPEG格式连同任务描述、当前页面URL/标题、历史操作记录（含验证成功/失败标记）和可交互元素文字列表（编号、标签、文字内容、aria-label）一并发送给VLM。VLM返回的结构化JSON包含操作类型（\texttt{click/type/scroll/press/goto/answer/fail}）、目标元素编号和操作值，同时还包含对已完成步骤的总结和后续计划，帮助模型在跨步骤任务中保持连贯性。
+感知阶段负责将当前网页的视觉状态转化为VLM可以理解的结构化表示。该阶段的输入为Playwright控制的浏览器页面，输出为SoM标注后的截图以及可交互元素列表。
 
-\textbf{执行阶段（Act）}由\texttt{ActionExecutor}负责将VLM决策转化为浏览器操作。点击操作采用4层回退机制：优先使用Playwright原生点击（产生\texttt{isTrusted=true}的真实事件），失败后依次尝试JS MouseEvent派发、基于元素真实链接的\texttt{goto}导航（绕过Bing等网站的点击拦截）、坐标中心点的\texttt{elementFromPoint}命中，最后回退至屏幕坐标点击。对于TYPE操作，强制要求先点击输入框获取焦点后再输入。执行完成后检测URL变化和新增标签页，自动切换到最新打开的标签页。
+\paragraph{ElementExtractor — 可交互元素提取}
 
-\textbf{验证阶段（Verify）}对操作效果进行判断。首先通过PIL的\texttt{ImageChops.difference}进行全图像素级对比，差异像素少于$0.05\%$时直接判定为无效操作。随后扫描DOM中的错误弹窗和成功提示（QQ邮箱的xmail-ui-dialog等）。若以上检测均未触发，可选调用VLM进行视觉对比验证。验证失败的步骤在下一轮推理时以\texttt{[NO EFFECT]}标记显示在历史记录中，引导模型尝试替代方案。
+\texttt{ElementExtractor}模块通过CSS选择器扫描页面DOM，提取所有可交互元素。主选择器覆盖了HTML原生交互标签（\texttt{<button>}、\texttt{<a>}、\texttt{<input>}、\texttt{<select>}、\texttt{<textarea>}）、WAI-ARIA角色属性（\texttt{[role="button"]}等）、事件处理器标记（\texttt{[onclick]}、\texttt{[tabindex]}）、无障碍标签（\texttt{[aria-label]}）以及QQ邮箱自定义的无障碍属性（\texttt{[data-a11y]}）。
+
+\begin{lstlisting}[language=Python, caption=INTERACTIVE\_SELECTOR定义, label=lst:selector]
+INTERACTIVE_SELECTOR = (
+    "button, a, input, select, textarea, "
+    "[role='button'], [role='link'], [role='checkbox'], "
+    "[role='radio'], [role='combobox'], [role='listbox'], "
+    "[role='menu'], [role='tab'], [role='switch'], "
+    "[onclick], [tabindex], "
+    "[aria-label], [data-a11y]"
+)
+\end{lstlisting}
+
+对于采用React、Vue等前端框架构建的SPA页面，按钮元素通常为纯\texttt{<div>}或\texttt{<span>}标签，不含任何上述可匹配属性。此时提取模块启动补充扫描：遍历页面所有元素，检测其计算样式中\texttt{cursor}属性是否为\texttt{pointer}，并结合可见文本长度（1--8字符）识别为框架按钮。这一启发式策略能够有效捕获纯div按钮。
+
+所有候选元素经过可见性过滤（\texttt{display:none}、\texttt{visibility:hidden}、\texttt{opacity:0}）、尺寸过滤（最小4px²）、交互性过滤（\texttt{disabled}、\texttt{pointer-events:none}）后，按照视觉位置排序并分配连续编号。同时，提取阶段会存储每个候选元素的DOM引用（\_el），供后续\texttt{data-som-id}注入使用。
+
+\paragraph{SoMMarker — 视觉标记绘制}
+
+\texttt{SoMMarker}模块使用PIL（Python Imaging Library）在页面截图上绘制交互元素的视觉标记。为每个候选元素绘制指定颜色的矩形边框（默认线宽2px），并在边框上方或内侧放置带纯色背景的数字标签。标签采用12种高对比度颜色循环分配，相邻元素尽量使用不同颜色以便于区分。当标签因元素密集而可能重叠时，模块自动将标签移至下一个非重叠候选位置（边框上方、边框内侧左上角），确保所有标签清晰可读。
+
+\paragraph{DOMBridge — 编号到DOM的双向映射}
+
+\texttt{DOMBridge}维护SoM标记编号与DOM元素之间的双向映射关系。每个标记编号被映射至三个关键信息：元素的CSS选择器（用于Playwright定位）、元素的归一化边界框（用于坐标回退点击）以及后端节点ID（用于Mind2Web评测）。在执行阶段，通过\texttt{get\_bbox(id)}可获取指定编号元素的边界框，\texttt{som\_id\_to\_selector(id)}可将编号转换为Playwright定位器，支撑了从VLM文本输出到浏览器操作的完整链路。
+
+\subsubsection{推理阶段（Reason）}
+
+推理阶段将感知阶段的结构化输出组装为VLM可理解的prompt，调用模型获取下一步操作决策。
+
+\paragraph{Prompt组装}
+
+\texttt{build\_som\_user\_prompt}函数负责组装user prompt，其结构包括：（1）用户任务描述；（2）当前页面URL与标题；（3）当前计划（从上一步推理输出中提取，帮助模型保持任务连贯性）；（4）最近5步的历史操作记录，以\texttt{[OK]}/\texttt{[NO EFFECT]}/\texttt{[FAIL]}前缀区分执行结果；（5）可交互元素文字列表，每行格式为\texttt{[编号] <标签> "文本内容" aria="无障碍标签"}，供模型与截图中的视觉标记交叉参照；（6）操作指令。完整的prompt由system prompt（包含角色设定、响应格式、可用动作表、规则）与上述user prompt拼接而成。
+
+\paragraph{登录与验证码的人机协同机制}
+
+现今大量网页需要进行登录或验证才能体验完整功能，而agent本身难以独立完成验证码识别和登录流程，因此一定场景下，人工的介入是有必要的。
+
+系统采用"自动检测 + VLM视觉判断"双层策略应对登录和验证码场景。程序化检测层在感知阶段运行，通过JavaScript扫描页面DOM中的密码输入框（\texttt{input[type="password"]}）、扫码登录关键词（"微信登录""QQ登录""二维码登录"等），快速识别登录页面。检测到后，Agent直接暂停并通知前端等待人工介入。
+
+VLM视觉判断层作为补充，通过System Prompt中的\texttt{CAPTCHA / LOGIN — STOP IMMEDIATELY}规则引导：当VLM在截图或元素列表中识别到验证码（滑块、拼图、"安全验证"）、登录表单或扫码界面时，输出\texttt{captcha}或\texttt{login}操作。这两种操作被定义为终端操作（\texttt{is\_terminal=True}），执行后跳过验证阶段，直接进入暂停等待。用户完成登录或验证，点击继续后，Agent重新感知页面并恢复任务循环。
+
+\paragraph{VLM调用与响应解析}
+
+推理模块通过\texttt{ReasonerFactory}根据配置的provider名称（qwen/openai/anthropic/local）创建对应的推理器实例。VLM返回的JSON经\texttt{ActionParser}解析为\texttt{Action}数据类，包含操作类型（\texttt{ActionType}枚举）、目标元素编号和操作值（如待输入文本），交由执行器处理。
+
+\subsubsection{执行阶段（Act）}
+
+执行阶段将VLM的决策转化为浏览器实际操作，并处理操作后的页面状态变化。
+
+\paragraph{ActionExecutor — 多层回退点击}
+
+\texttt{ActionExecutor}负责执行VLM输出的操作指令。对于CLICK操作，采用4层回退机制以确保最大的执行可靠性：
+
+\begin{enumerate}
+    \item \textbf{Playwright原生点击}：产生浏览器原生事件，最接近真实用户操作，Spa与反爬检测系统无法区分。
+    \item \textbf{JS MouseEvent派发}：通过\texttt{dispatchEvent}派发完整的mousedown/mouseup/click事件序列，同时调用\texttt{el.click()}触发默认行为。
+    \item \textbf{Href导航}：对于\texttt{<a>}标签元素，提取其\texttt{href}属性并通过\texttt{page.goto()}直接导航。此机制专为绕过Bing等网站的点击拦截设计——Bing在搜索结果链接上使用\texttt{preventDefault()}拦截点击事件，直接导航可完全规避该问题。
+    \item \textbf{坐标回退}：通过\texttt{getBoundingClientRect}获取实时元素坐标，滚动至该位置后执行Playwright屏幕坐标点击。
+\end{enumerate}
+
+对于TYPE操作，执行器强制要求先通过JS \texttt{focus()}和\texttt{select()}将焦点赋予目标输入框，清除已有内容后再通过Playwright键盘输入新文本。
+
+\paragraph{新标签页检测与同步}
+
+执行CLICK或PRESS操作后，系统检测浏览器上下文中的页面数量变化。若检测到新打开的标签页，自动将当前操作页面切换至最新标签页，并在\texttt{screenshot()}和\texttt{get\_page\_url()}等所有页面访问方法中通过\texttt{context.pages[-1]}确保始终操作最新标签页。
+
+\subsubsection{验证阶段（Verify）}
+
+验证阶段在执行完成后立即对操作效果进行评估，为下一轮推理提供反馈信息。
+
+\paragraph{全图像素对比}
+
+通过PIL的\texttt{ImageChops.difference}对操作前后的页面截图进行逐像素相减，统计差异像素比例。若差异像素少于$0.05\%$（约460像素），直接判定操作无效，跳过后续验证步骤。该方法采用JPEG格式降低解码延迟，使前端在操作完成后立即看到前后对比截图。
+
+\paragraph{DOM错误检测}
+
+在像素对比之后（无论其是否触发），通过JavaScript扫描页面DOM中的错误提示元素。检测目标包括：WAI-ARIA标准角色（\texttt{[role="alert"]}、\texttt{[role="alertdialog"]}）、QQ邮箱自定义dialog组件（\texttt{.xmail-ui-dialog}）、通用错误toast和表单验证消息。该方法利用错误提示必然出现在DOM中的特性，以极低成本覆盖了VLM可能遗漏的错误弹窗场景。
+
+\paragraph{验证反馈与历史记录}
+
+验证结果（包括观察描述、是否应当重试、回退操作、替代操作）被记录在\texttt{StepRecord.verification}字段中。下一轮推理时，\texttt{build\_som\_user\_prompt}将最近步骤的验证结果格式化为\texttt{[OK]}（验证通过）、\texttt{[NO EFFECT]}（操作无效）或\texttt{[FAIL]}（执行失败）标记，连同失败原因一起展示在历史记录中。当连续出现2次以上失败标记时，prompt中额外添加警告信息，引导VLM尝试完全不同的操作策略。
+
+\subsubsection{前端Web交互界面}
+
+前端基于FastAPI WebSocket与纯HTML/CSS/JavaScript构建，采用玻璃态深色主题。核心功能包括任务配置、Agent步骤实时展示、浏览器画面实时流和键鼠交互反馈。
+
+\paragraph{实时截图流（CDP Screencast）}
+
+前端通过独立WebSocket通道\texttt{/ws/screencast}接收浏览器实时画面流。后端利用Playwright的Chrome DevTools Protocol（CDP）接口启动\texttt{Page.startScreencast}，以960×540分辨率、约15fps的频率持续截取当前标签页画面，通过专用WebSocket推送至前端渲染到Canvas元素上。该通道与控制消息WebSocket完全分离，避免了高频帧数据阻塞控制消息的传输。
+
+Screencast模块在浏览器切换标签页时自动检测并重建CDP会话——当帧超时或会话断开时，通过\texttt{env.get\_cdp\_session()}重新获取新标签页的CDP连接并重启推流，确保实时画面始终跟随Agent当前操作的标签页。
+
+\paragraph{键鼠交互反馈}
+
+前端Canvas元素接收用户的键盘和鼠标事件（click、wheel、keydown等），将事件类型与坐标通过主WebSocket\texttt{/ws/agent}以\texttt{browser\_input}消息发送至后端。后端通过CDP的\texttt{Input.dispatchMouseEvent}、\texttt{Input.dispatchKeyEvent}等接口将用户操作转发至浏览器，实现用户在Web界面上直接操控Agent浏览器窗口的能力。
+
 
 \subsection{HTML文本输入模式}
 
@@ -309,43 +353,9 @@ HTML模式与SoM模式共享完全相同的Agent循环和Executor，差异仅在
     \item \textbf{验证层}：HTML模式下无截图，验证功能被简化为URL变化检测和DOM错误弹窗扫描。
 \end{itemize}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\begin{tikzpicture}[
-    node distance=0.6cm and 2cm,
-    block/.style = {
-        rectangle, draw, thick, rounded corners=3pt,
-        fill=blue!6, drop shadow,
-        text centered, font=\sffamily\footnotesize, minimum width=2.6cm, minimum height=0.8cm
-    },
-    somblock/.style = {block, fill=yellow!6, align=center},
-    htmlblock/.style = {block, fill=green!6, align=center},
-    arrow/.style = {thick, -{Stealth}},
-    dasharrow/.style = {thick, -{Stealth}, dashed, gray},
-]
-
-% SoM侧
-\node (som_label) [font=\sffamily\footnotesize\bfseries, text=blue] at (0, 0.2) {SoM视觉模式};
-\node (som_p) [somblock, below=0.3cm of som_label] {SoMPerceptor\\截图+标注+提取};
-\node (som_r) [somblock, below=0.3cm of som_p] {SoM Prompt\\截图+元素列表+历史};
-
-% HTML侧
-\node (html_label) [font=\sffamily\footnotesize\bfseries, text=green!50!black, right=4.5cm of som_label] {HTML文本模式};
-\node (html_p) [htmlblock, below=0.3cm of html_label] {HTMLPerceptor\\候选/提取+页面文本};
-\node (html_r) [htmlblock, below=0.3cm of html_p] {HTML Prompt\\元素文本+页面文本+历史};
-
-% 共享层
-\node (shared) [block, fill=gray!10, minimum width=7.5cm] at (2.25,-3.2) {共享: Agent循环 / ActionExecutor / Playwright};
-
-% 箭头
-\draw[arrow] (som_p) -- (som_r);
-\draw[arrow] (html_p) -- (html_r);
-\draw[dasharrow] (som_r.south) -- ++(0,-0.3) -- ++(-1.5,0) -- (shared.north -| som_r);
-\draw[dasharrow] (html_r.south) -- ++(0,-0.3) -- ++(1.5,0) -- (shared.north -| html_r);
-\draw[dasharrow, gray] (som_p.east) -- ++(0.5,0) |- (html_p.west)
-    node[pos=0.5, above, font=\sffamily\tiny, text=gray] {ElementExtractor可复用};
-
-\end{tikzpicture}
+\includegraphics[width=0.7\textwidth]{html_mode.png}
 \caption{SoM模式与HTML模式的架构对比}
 \label{fig:html_mode}
 \end{figure}

@@ -442,6 +442,10 @@ INPUT d:/texlive/2024/texmf-dist/fonts/tfm/public/amsfonts/cmextra/cmbsy7.tfm
 INPUT d:/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmr8.tfm
 INPUT d:/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmr6.tfm
 OUTPUT lab4.toc
+INPUT ./figures/arch_som.png
+INPUT ./figures/arch_som.png
+INPUT ./figures/html_mode.png
+INPUT ./figures/html_mode.png
 INPUT d:/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmmi10.tfm
 INPUT d:/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmsy10.tfm
 INPUT d:/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmex10.tfm

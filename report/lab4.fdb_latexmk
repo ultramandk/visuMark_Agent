@@ -1,13 +1,13 @@
 # Fdb version 4
-["xdvipdfmx"] 1781613301.80035 "lab4.xdv" "lab4.pdf" "lab4" 1781613304.40447 0
-  "lab4.xdv" 1781613301 177096 12cc72434dce166d53854cbe2e52521e "xelatex"
+["xdvipdfmx"] 1781628385.12726 "lab4.xdv" "lab4.pdf" "lab4" 1781628390.31031 0
+  "lab4.xdv" 1781628384 210488 b312934f9a0b1ba18e035c78339346b6 "xelatex"
   (generated)
   "lab4.pdf"
   (rewritten before read)
-["xelatex"] 1781613296.65524 "d:/document/multimodel/visuMark_Agent/report/lab4.tex" "lab4.xdv" "lab4" 1781613304.3617 0
+["xelatex"] 1781628383.05218 "d:/document/multimodel/visuMark_Agent/report/lab4.tex" "lab4.xdv" "lab4" 1781628390.29682 0
   "SYSUReport.cls" 1781556398 5637 3a173891a2a9cb76a9031a1d7e1a6773 ""
   "c:/Windows/Fonts/msyh.ttc" 1731496509 19704352 1e10e74402e59d54499af795caf0b135 ""
-  "d:/document/multimodel/visuMark_Agent/report/lab4.tex" 1781613289 27713 8019911533616cb7d742286052c2b13d ""
+  "d:/document/multimodel/visuMark_Agent/report/lab4.tex" 1781628378 31503 7987a220f8ee081bcd766b614d7e6710 ""
   "d:/texlive/2024/texmf-dist/fonts/map/fontname/texfonts.map" 1740673852 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "d:/texlive/2024/texmf-dist/fonts/tfm/adobe/zapfding/pzdr.tfm" 1740676108 1528 7e12f4c0fcf5a072cebdcfbfc610f54c ""
   "d:/texlive/2024/texmf-dist/fonts/tfm/public/amsfonts/cmextra/cmbsy7.tfm" 1740673155 1120 7f9f170e8aa57527ad6c49feafd45d54 ""
@@ -232,11 +232,13 @@
   "d:/texlive/2024/texmf-dist/web2c/texmf.cnf" 1740673094 41649 5d6ae549fbbcb850a863f69aa41f3d10 ""
   "d:/texlive/2024/texmf-var/web2c/xetex/xelatex.fmt" 1740676323 10849630 384087f7d30a5256924d3d7c1da1d6b7 ""
   "d:/texlive/2024/texmf.cnf" 1740676127 713 e69b156964470283e0530f5060668171 ""
+  "figures/arch_som.png" 1781626459 566983 f7588ed29c1bdd8352a20b4928691d3e ""
+  "figures/html_mode.png" 1781626482 495619 b5e0ad250ba8fcdb085b1044f3d7f771 ""
   "figures/sysu.jpg" 1742761668 297495 aa8a92d456c095fddae43e20a372cee9 ""
-  "lab4.aux" 1781613301 3296 03b374bd718844db9bd8c61720781351 "xelatex"
-  "lab4.out" 1781613301 1430 498d5d82bb2a147e7d67a119977d40bb "xelatex"
-  "lab4.tex" 1781613289 27713 8019911533616cb7d742286052c2b13d ""
-  "lab4.toc" 1781613301 1076 7896b6414128a20cf37456a87e266b4c "xelatex"
+  "lab4.aux" 1781628384 5872 6bbabe1fc198b1f10d155468b29417d9 "xelatex"
+  "lab4.out" 1781628384 2274 368f0fa6a8f1769cc6db06455330257a "xelatex"
+  "lab4.tex" 1781628378 31503 7987a220f8ee081bcd766b614d7e6710 ""
+  "lab4.toc" 1781628384 2624 e76b80a368a7e7f4f74683b2c21a23a7 "xelatex"
   (generated)
   "lab4.aux"
   "lab4.log"
