@@ -10,6 +10,11 @@
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{fontspec}
+
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, shadows.blur, backgrounds}
+
+
 % --- 定义颜色 (模仿 VS Code 或常见 IDE) ---
 \definecolor{codegreen}{rgb}{0,0.6,0}
 \definecolor{codegray}{rgb}{0.5,0.5,0.5}
@@ -174,6 +179,179 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \fontsize{12}{18}\selectfont
 \tableofcontents
+
+\subsection{应用背景}
+随着互联网的快速发展，网页的样式和信息量都在经历日新月异地增长，为人们完成特定的网页任务带来了挑战。
+在多模态大模型技术成熟的背景下，基于VLM/LLM技术实现的多模态网页Agent能够实现辅助和某种程度地替代人类
+完成对应的网页任务，具有广阔的应用前景。Web Agent可以作为自动化测试工具，辅助软件开发团队进行前端的
+冒烟测试与回归测试。Web Agent也可以作为智能个人助理，帮助个人用户执行复杂任务，降低网页任务的操作成本。
+除此以外，Web Agent可以实现复杂数据的收集与分析、改进针对障碍人士的辅助功能等任务。
+
+\subsection{任务定义}
+我们计划实现一个能够理解自然语言指令，并通过浏览器自主完成复杂任务的智能代理。
+用户将网页任务目标作为输入，在执行任务的每一步中
+获取网页的 Accessibility Tree并根据网页截图进行SoM标记，
+将网页截图与SoM输入多模态大模型，生成对应的指令，并使用playwright执行并等待页面反馈、进行任务的下一步。
+基于任务导向，我们计划实现：
+\begin{itemize}
+    \item 一个SoM内容标注器，根据网页截图和Accessibility Tree生成元素边界框和对应的id，提高模型的准确率
+    \item 一个基于VLM的Web Agent，根据用户输入进行任务的分步计划、在每一步根据网页截图信息和SoM标注生成对应的网页操作指令
+    \item 一个playwright执行器，解析Agent输出的执行指令并执行，刷新网页进行下一步任务
+\end{itemize}
+
+
+\section{相关工作调研}
+本课题相关工作涉及多模态GUI代理、网页自动化框架、任务规划与视觉定位等方向，以下列举代表性论文与开源项目。
+
+\subsection{多模态网页Agent}
+\begin{itemize}
+    \item \textbf{WebVoyager} \cite{webvoyager}: 提出基于GPT-4V的端到端网页Agent，在真实网站上通过截图和HTML辅助实现高成功率，验证了大视觉模型在网页导航中的可行性。
+    \item \textbf{Fara-7B} (Microsoft Research) \cite{fara7b}: 一个7B参数的多模态模型，结合Magentic-UI框架，使用Playwright执行操作，在控制复杂度的同时实现良好性能，是本课题的核心参考。
+    \item \textbf{WebAgent} 综述 \cite{webagent_survey}: 对基于LLM的网页自动化Agent进行了系统分类，总结了规划、感知、执行的典型架构。
+\end{itemize}
+
+\subsection{视觉定位与混合感知}
+\begin{itemize}
+    \item \textbf{SoM (Set-of-Mark)} \cite{som}: 通过为可交互元素叠加数字标记，将 GUI 定位任务转化为标记选择任务，显著提升 VLM 在界面上的 grounding 准确率。本系统将 SoM 作为预处理模块，为 VLLM 提供可直接引用的标记索引。
+    \item \textbf{R-VLM} \cite{rvlm}: 提出IoU感知的目标函数和缩放区域候选框，将GUI元素定位精度大幅提升，在Mind2Web基准上获得高准确率，为改进视觉定位提供了理论支持。
+    \item \textbf{WebGUM} \cite{webgum}: 证明同时利用HTML/可访问性树和视觉信息比纯视觉或纯DOM方法更有效，为本课题混合感知策略提供了实验依据。
+\end{itemize}
+
+\subsection{相关开源项目}
+\begin{itemize}
+    \item \textbf{Playwright} \cite{playwright}: 现代浏览器自动化框架，提供跨浏览器、可靠的选择器和等待机制，本课题的执行层核心。
+    \item \textbf{OpenClaw / Nanobot} \cite{openclaw}: 开源的多模态Agent实现，展示了从截图到操作的简易流水线，但缺乏精心设计的错误恢复和混合感知。
+    \item \textbf{SMART-LLM} \cite{smartllm}: 多Agent协作框架，用于复杂任务规划，可借鉴其任务分解与验证机制。
+\end{itemize}
+
+\section{系统方案设计}
+
+\subsection{SoM视觉输入模式}
+
+SoM（Set-of-Mark）模式是系统的主要运行模式。该模式将网页截图与可交互元素的视觉标记相结合，使VLM能够直观地看到页面上的可操作元素，并通过引用标记编号来精确指定操作目标。其整体架构如图\ref{fig:arch_som}所示，遵循ReAct（Reasoning + Acting）范式，每步操作分为感知（Perceive）、推理（Reason）、执行（Act）和验证（Verify）四个阶段。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1.5cm,
+    block/.style = {
+        rectangle, draw, thick, rounded corners=3pt,
+        fill=blue!8, drop shadow,
+        text centered, font=\sffamily\footnotesize, minimum width=2.4cm, minimum height=0.8cm
+    },
+    subblock/.style = {
+        rectangle, draw, thin, rounded corners=2pt,
+        fill=gray!5, font=\sffamily\scriptsize, minimum width=2.2cm, minimum height=0.55cm
+    },
+    arrow/.style = {thick, -{Stealth}},
+    label/.style = {font=\sffamily\scriptsize}
+]
+
+% 四阶段主节点
+\node (perceive) [block, fill=yellow!10] {1. 感知 (Perceive)};
+\node (reason) [block, fill=orange!10, below=0.5cm of perceive] {2. 推理 (Reason)};
+\node (act) [block, fill=green!10, below=0.5cm of reason] {3. 执行 (Act)};
+\node (verify) [block, fill=red!10, below=0.5cm of act] {4. 验证 (Verify)};
+
+% 感知子模块
+\node (extract) [subblock, right=0.3cm of perceive, xshift=2.8cm] {ElementExtractor};
+\node (marker) [subblock, below=0.2cm of extract] {SoMMarker};
+\node (bridge) [subblock, below=0.2cm of marker] {DOMBridge};
+
+% 推理子模块
+\node (vlm_call) [subblock, right=0.3cm of reason, xshift=2.8cm] {VLM调用 (OpenAI/Qwen等)};
+\node (parser) [subblock, below=0.2cm of vlm_call] {ActionParser};
+
+% 执行子模块
+\node (playwright) [subblock, right=0.3cm of act, xshift=2.8cm] {Playwright浏览器};
+\node (executor) [subblock, below=0.2cm of playwright] {ActionExecutor (4层回退)};
+
+% 验证子模块
+\node (pixel_diff) [subblock, right=0.3cm of verify, xshift=2.8cm] {像素对比 (全图)};
+\node (dom_check) [subblock, below=0.2cm of pixel_diff] {DOM错误检测};
+\node (vlm_verify) [subblock, below=0.2cm of dom_check] {VLM验证 (可选)};
+
+% 阶段间主流程
+\draw[arrow] (perceive) -- (reason);
+\draw[arrow] (reason) -- (act);
+\draw[arrow] (act) -- (verify);
+\draw[arrow, dashed, blue] (verify.west) -- ++(-1.2,0) |- (perceive.west)
+    node[pos=0.5, left, label] {下一轮};
+
+% 输入输出
+\node (input_label) [font=\sffamily\tiny, text=gray, left=0cm of perceive, xshift=-2.0cm] {任务描述 + URL};
+\node (output_label) [font=\sffamily\tiny, text=gray, left=0cm of verify, xshift=-2.0cm] {Answer / 操作};
+\draw[arrow, gray!50] (input_label) -- (perceive);
+\draw[arrow, gray!50] (verify) -- (output_label);
+
+\end{tikzpicture}
+\caption{SoM模式的ReAct循环架构}
+\label{fig:arch_som}
+\end{figure}
+
+\textbf{感知阶段（Perceive）}负责将当前网页状态转化为VLM可理解的表示。首先通过Playwright截取当前页面的全页面截图，同时通过\texttt{ElementExtractor}模块使用CSS选择器（覆盖\texttt{<button>}、\texttt{<a>}、\texttt{<input>}等原生交互标签，以及\texttt{[role]}、\texttt{[aria-label]}、\texttt{[data-a11y]}等富交互属性）提取页面中所有可交互的DOM元素。对于现代SPA框架中无任何HTML属性的按钮，通过检测\texttt{cursor: pointer}计算样式作为补充识别手段。元素经过可见性、尺寸（最小4px²）、disabled和pointer-events过滤后，由\texttt{SoMMarker}模块在截图上绘制带编号的彩色矩形边框（12色调色板）。同时\texttt{DOMBridge}维护SoM编号到CSS选择器及Playwright定位器的双向映射，使后续执行阶段能将VLM输出的元素编号解析为可点击的DOM元素。对于旧版QQ邮箱等使用frameset架构的网页，感知阶段会遍历所有\texttt{<iframe>}子文档并修正坐标偏移，确保标注位置正确。
+
+\textbf{推理阶段（Reason）}将SoM标注后的截图以base64 JPEG格式连同任务描述、当前页面URL/标题、历史操作记录（含验证成功/失败标记）和可交互元素文字列表（编号、标签、文字内容、aria-label）一并发送给VLM。VLM返回的结构化JSON包含操作类型（\texttt{click/type/scroll/press/goto/answer/fail}）、目标元素编号和操作值，同时还包含对已完成步骤的总结和后续计划，帮助模型在跨步骤任务中保持连贯性。
+
+\textbf{执行阶段（Act）}由\texttt{ActionExecutor}负责将VLM决策转化为浏览器操作。点击操作采用4层回退机制：优先使用Playwright原生点击（产生\texttt{isTrusted=true}的真实事件），失败后依次尝试JS MouseEvent派发、基于元素真实链接的\texttt{goto}导航（绕过Bing等网站的点击拦截）、坐标中心点的\texttt{elementFromPoint}命中，最后回退至屏幕坐标点击。对于TYPE操作，强制要求先点击输入框获取焦点后再输入。执行完成后检测URL变化和新增标签页，自动切换到最新打开的标签页。
+
+\textbf{验证阶段（Verify）}对操作效果进行判断。首先通过PIL的\texttt{ImageChops.difference}进行全图像素级对比，差异像素少于$0.05\%$时直接判定为无效操作。随后扫描DOM中的错误弹窗和成功提示（QQ邮箱的xmail-ui-dialog等）。若以上检测均未触发，可选调用VLM进行视觉对比验证。验证失败的步骤在下一轮推理时以\texttt{[NO EFFECT]}标记显示在历史记录中，引导模型尝试替代方案。
+
+\subsection{HTML文本输入模式}
+
+HTML模式是为Mind2Web数据集评测而引入的纯文本输入变体。其设计目标是让同一个Agent框架能够在不依赖截图的情况下，仅通过HTML元素文本列表完成网页操作评估。由于Mind2Web数据集预先标注了每个步骤的正负候选元素及其\texttt{backend\_node\_id}，HTML模式不需要截图和SoM标注，改为直接从数据集读取候选列表并格式化为编号文本供LLM选择。
+
+HTML模式与SoM模式共享完全相同的Agent循环和Executor，差异仅在于Perceptor和Prompt。如图\ref{fig:html_mode}所示：
+
+\begin{itemize}
+    \item \textbf{感知层}：由\texttt{HTMLPerceptor}替代\texttt{SoMPerceptor}，离线评估时读取Mind2Web候选数据，实时运行时可回退至\texttt{ElementExtractor}提取真实页面元素，同时提取\texttt{body.innerText}作为页面内容摘要供LLM理解当前页面状态。
+    \item \textbf{推理层}：Reasoner自动检测\texttt{perception.screenshot}是否为空，若为空则切换至HTML文本Prompt，将元素列表、页面文本、历史记录和当前计划格式化为纯文本发送给LLM。
+    \item \textbf{验证层}：HTML模式下无截图，验证功能被简化为URL变化检测和DOM错误弹窗扫描。
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.6cm and 2cm,
+    block/.style = {
+        rectangle, draw, thick, rounded corners=3pt,
+        fill=blue!6, drop shadow,
+        text centered, font=\sffamily\footnotesize, minimum width=2.6cm, minimum height=0.8cm
+    },
+    somblock/.style = {block, fill=yellow!6, align=center},
+    htmlblock/.style = {block, fill=green!6, align=center},
+    arrow/.style = {thick, -{Stealth}},
+    dasharrow/.style = {thick, -{Stealth}, dashed, gray},
+]
+
+% SoM侧
+\node (som_label) [font=\sffamily\footnotesize\bfseries, text=blue] at (0, 0.2) {SoM视觉模式};
+\node (som_p) [somblock, below=0.3cm of som_label] {SoMPerceptor\\截图+标注+提取};
+\node (som_r) [somblock, below=0.3cm of som_p] {SoM Prompt\\截图+元素列表+历史};
+
+% HTML侧
+\node (html_label) [font=\sffamily\footnotesize\bfseries, text=green!50!black, right=4.5cm of som_label] {HTML文本模式};
+\node (html_p) [htmlblock, below=0.3cm of html_label] {HTMLPerceptor\\候选/提取+页面文本};
+\node (html_r) [htmlblock, below=0.3cm of html_p] {HTML Prompt\\元素文本+页面文本+历史};
+
+% 共享层
+\node (shared) [block, fill=gray!10, minimum width=7.5cm] at (2.25,-3.2) {共享: Agent循环 / ActionExecutor / Playwright};
+
+% 箭头
+\draw[arrow] (som_p) -- (som_r);
+\draw[arrow] (html_p) -- (html_r);
+\draw[dasharrow] (som_r.south) -- ++(0,-0.3) -- ++(-1.5,0) -- (shared.north -| som_r);
+\draw[dasharrow] (html_r.south) -- ++(0,-0.3) -- ++(1.5,0) -- (shared.north -| html_r);
+\draw[dasharrow, gray] (som_p.east) -- ++(0.5,0) |- (html_p.west)
+    node[pos=0.5, above, font=\sffamily\tiny, text=gray] {ElementExtractor可复用};
+
+\end{tikzpicture}
+\caption{SoM模式与HTML模式的架构对比}
+\label{fig:html_mode}
+\end{figure}
+
+HTML模式无需额外开发，仅需替换Perceptor和Prompt即可从视觉输入切换为文本输入，有效降低了为不同数据集定制评测流程的成本。
+
 \section{实验评测与分析}
 针对项目模型的SoM输入与HTML输入模式分别设计了评测实验。所有本地模型均在一台RTX 3090 24GB $\times 1$，内存60GB的计算机上运行，并使用Qwen 3VL-8B-Instruct作为本地测试模型,使用API调用Qwen3.7-max测试。
 选取任务成功率(SR)、元素准确率(Ele. Acc)、任务单步操作的F1分数(OP.F1)、任务单步成功率(Step SR)以及单步平均耗时作为评价Web Agent性能的标准。
@@ -217,7 +395,7 @@ Qwen3.7-max & 64.6 & 80.5 & 52.0 & 8.7 & 57.9 & 81.3 & 42.4 & 6.2 & 55.6 & 81.9 
 的优势，在相对较好的网页操作性能和较快的响应时间中取得了平衡。Qwen3.7-max的参数量过大，虽然准确率更高但响应时间是Qwen3-VL-8B的11倍，不具有实时性。
 \subsection{SoM输入模式下的性能测评}
 
-为评估SoM视觉输入模式在真实网页场景下的表现，自行设计了包含30个任务的测试集，全部基于可公开访问的真实网站。测试任务覆盖多种难度与应用场景，代表性任务包括：搜索"中山大学广州校区南校园"并返回地址、打开哔哩哔哩首页点击第一个视频后返回作者头像、登录QQ邮箱并向指定地址发送端午祝福邮件等。完整任务列表见附录。所有测试均使用Qwen 3VL-8B-Instruct模型，在有头浏览器模式下运行，每个任务至少重复运行3次以减小随机性。
+为评估SoM视觉输入模式在真实网页场景下的表现，自行设计了包含30个任务的测试集，全部基于可公开访问的真实网站。测试任务覆盖多种难度与应用场景，代表性任务包括：搜索"中山大学广州校区南校园"并返回地址、打开哔哩哔哩首页点击第一个视频后返回作者头像、登录QQ邮箱并向指定地址发送端午祝福邮件等。完整任务列表见附录。所有测试均使用Qwen 3VL-8B-Instruct模型，在有头浏览器模式下运行，每个任务至少重复运行10次以减小随机性。
 
 由于自建测试集缺少Mind2Web数据集中的Ground Truth标注（如真实操作序列和正负候选元素），无法直接计算Ele. Acc和Op.F1等微观指标。因此针对真实网页场景，定义以下两项宏观指标评价Agent的任务完成能力：
 
@@ -247,5 +425,18 @@ Qwen 3VL-8B & 73.3 & 10.5 & 40.0 & 6.8 \\
 由表2可以看出，SoM视觉输入模式相比HTML文本输入模式在真实网页任务上具有显著优势。任务成功率从$40.0\%$提升至$73.3\%$，提升幅度达$83.3\%$。分析任务完成情况发现，HTML输入模式能够成功完成的任务以简单的搜索引擎查询为主（如事实类搜索、天气查询等），一旦任务涉及表单填写、页面跳转、多步交互等复杂操作，成功率显著下降。SoM模式由于能够直观地识别页面布局与元素空间位置，在需要点击特定按钮、填写表单、切换标签页等复杂操作时表现更好。但SoM模式的完成任务平均步数$10.5$步明显高于HTML模式的$6.8$步，这一方面是因为SoM模式成功完成的任务本身更复杂，自然需要更多操作步数；另一方面也与SoM模式下模型倾向于执行更多探索性操作（如下拉滚动、尝试不同元素）有关。
 
 总体而言，SoM输入模式以更多的操作步数为代价，换取了更高的任务完成率与更广泛的任务适用性，在真实网页场景下优于HTML文本输入模式。
+
+\section{参考文献}
+\begin{thebibliography}{99}
+\bibitem{webvoyager} He, Y., et al. “WebVoyager: Building an End-to-End Web Agent with Large Multimodal Models.” 10.48550/arXiv.2401.13919
+\bibitem{fara7b} Microsoft Research. “Fara-7B: A Foundation Model for GUI Automation.” 2025.
+\bibitem{webagent_survey} Xinyi Li, et al. “A survey on LLM-based multi-agent systems: workflow, infrastructure, and challenges”  Computer Science.10.1007/s44336-024-00009-2
+\bibitem{som} Yang, J., et al. “Set-of-Mark Prompting Unleashes Extraordinary Visual Grounding in GPT-4V.” arXiv preprint arXiv:2310.11441, 2023.
+\bibitem{rvlm} Cheng, K., et al. “R-VLM: Region-Aware Vision Language Model for Precise GUI Grounding.” arXiv preprint 10.48550/arXiv.2507.05673.
+\bibitem{webgum} Furuta, H., et al. “WebGUM: Multimodal Web Navigation with Instruction-Finetuned Foundation Models.” arXiv.2305.11854v4
+\bibitem{playwright} Microsoft. “Playwright: Fast and Reliable Cross-Browser Automation.” \url{https://playwright.dev/}, 2025.
+\bibitem{openclaw} OpenClaw Contributors. “OpenClaw: Open-Source Multimodal Web Agent.” GitHub, 2025.
+\bibitem{smartllm} SMART-Lab Purdue. “SMART-LLM: Multi-Agent Task Planning.” GitHub, 2024.
+\end{thebibliography}
 
 \end{document}

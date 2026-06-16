@@ -328,6 +328,7 @@ def _build_extraction_js(
             attributes: attrs,
             backend_node_id: backendId,
             selector: selector,
+            _el: el,     // Keep DOM ref for injection (same JS call)
         }});
     }}
 
@@ -378,6 +379,7 @@ def _build_extraction_js(
                 attributes: attrs,
                 backend_node_id: backendId,
                 selector: selector,
+                _el: el,
             }});
         }}
         console.debug('SPA fallback scan: found', candidates.length, 'cursor-pointer elements');
@@ -475,9 +477,50 @@ def _build_extraction_js(
                     attributes: attrs,
                     backend_node_id: backendId,
                     selector: selector,
+                    _el: el,
                 }});
             }}
             console.debug('iframe scan: found', candidates.length, 'total candidates after frame check');
+        }}
+    }}
+
+    // ── Parent suppression: remove large containers whose children
+    //     are already in the candidates list.  Example: QQ Mail's
+    //     <div class="mail-compose-receivers"> wraps 收件人 label +
+    //     抄送/密送/分别发送 buttons — keeping the parent would make
+    //     its center point fall on a random button.
+    if (candidates.length > 10) {{
+        const toRemove = new Set();
+        // Compute average child area for scale reference
+        let totalArea = 0;
+        for (const c of candidates) totalArea += c.w * c.h;
+        const avgArea = totalArea / candidates.length;
+
+        for (let i = 0; i < candidates.length; i++) {{
+            const p = candidates[i];
+            const pArea = p.w * p.h;
+            // Only suppress if parent is much larger than average (5x)
+            if (pArea < avgArea * 5) continue;
+            const pRight = p.x + p.w;
+            const pBottom = p.y + p.h;
+            let childrenContained = 0;
+            let uniqueTexts = new Set();
+            for (let j = 0; j < candidates.length; j++) {{
+                if (i === j) continue;
+                const c = candidates[j];
+                if (c.x >= p.x && c.y >= p.y &&
+                    c.x + c.w <= pRight && c.y + c.h <= pBottom) {{
+                    childrenContained++;
+                    if (c.text) uniqueTexts.add(c.text);
+                }}
+            }}
+            // Suppress: >=5 children, >=3 distinct texts, area 5x average
+            if (childrenContained >= 5 && uniqueTexts.size >= 3) {{
+                toRemove.add(i);
+            }}
+        }}
+        for (let i = candidates.length - 1; i >= 0; i--) {{
+            if (toRemove.has(i)) candidates.splice(i, 1);
         }}
     }}
 
@@ -508,75 +551,13 @@ def _build_extraction_js(
             return false;
         }}
 
-        // Tag the EXACT element with data-som-id using elementFromPoint.
-        // CSS selectors are ambiguous for SPA pages where many elements
-        // share the same tag/class (e.g. multiple <div.xmail-ui-btn>).
-        // elementFromPoint at bbox center finds the actual element under
-        // the cursor, not the first match of a generic selector.
-        //
-        // Also pierces through iframes: if elementFromPoint hits an
-        // iframe, we look inside it at the relative coordinates.
-        // This is critical for QQ Mail and other webmail clients that
-        // render their UI inside iframes.
+        // Inject data-som-id directly on the element we extracted.
+        // We stored the live DOM reference (_el) during extraction
+        // — no selector re-query, no elementFromPoint ambiguity.
         try {{
-            const sel = candidates[i].selector;
-            let tagged = false;
-
-            // ── Selector-first: if the CSS selector is precise (has #id or
-            //     [attr=val] qualifier), trust it directly.  This avoids
-            //     elementFromPoint ambiguity (e.g. Baidu search button vs
-            //     overlapping Maps link).
-            const isPrecise = sel.indexOf('#') > -1 || sel.indexOf('="') > -1;
-            if (isPrecise) {{
-                const el = document.querySelector(sel);
-                if (el) {{
-                    el.setAttribute('data-som-id', String(id));
-                    tagged = true;
-                }}
-            }}
-
-            // ── elementFromPoint fallback: for generic selectors (div, span)
-            //     where multiple elements match, use the visual position.
-            if (!tagged) {{
-                const cx = candidates[i].x + candidates[i].w / 2;
-                const cy = candidates[i].y + candidates[i].h / 2;
-                let atPoint = document.elementFromPoint(cx, cy);
-
-                // iframe piercing
-                if (atPoint && atPoint.tagName === 'IFRAME') {{
-                    try {{
-                        const iframeDoc = atPoint.contentDocument || atPoint.contentWindow.document;
-                        if (iframeDoc) {{
-                            const iframeRect = atPoint.getBoundingClientRect();
-                            const relX = cx - iframeRect.left;
-                            const relY = cy - iframeRect.top;
-                            const inner = iframeDoc.elementFromPoint(relX, relY);
-                            if (inner && inner !== iframeDoc.body && inner !== iframeDoc.documentElement) {{
-                                atPoint = inner;
-                            }}
-                        }}
-                    }} catch(e) {{}}
-                }}
-
-                if (atPoint && atPoint !== document.body && atPoint !== document.documentElement) {{
-                    // Walk up to nearest interactive root
-                    let node = atPoint;
-                    const ORIGINAL_TAG = candidates[i].tag;
-                    for (let walk = 0; walk < 5 && node && node !== document.body; walk++) {{
-                        if (_isInteractiveRoot(node, ORIGINAL_TAG)) break;
-                        node = node.parentElement;
-                    }}
-                    if (node && node !== document.body) {{
-                        node.setAttribute('data-som-id', String(id));
-                        tagged = true;
-                    }}
-                }}
-            }}
-
-            // Last resort: generic CSS selector
-            if (!tagged) {{
-                const el = document.querySelector(sel);
-                if (el) el.setAttribute('data-som-id', String(id));
+            const el = candidates[i]._el;
+            if (el) {{
+                el.setAttribute('data-som-id', String(id));
             }}
         }} catch(e) {{
             // Element gone — but data is still valid for annotation

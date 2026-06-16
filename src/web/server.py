@@ -31,7 +31,7 @@ from visumark.core.types import StepRecord, ActionType
 from visumark.perception.dom_bridge import DOMBridge
 from visumark.utils.logging import setup_logger
 
-setup_logger(level="INFO")
+setup_logger(level="DEBUG")
 
 app = FastAPI(title="VisuMark Agent Web UI", version="0.2.0")
 

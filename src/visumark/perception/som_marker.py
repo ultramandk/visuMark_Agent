@@ -177,14 +177,14 @@ class SoMMarker:
             label = str(elem.id)
             tbox = draw.textbbox((0, 0), label, font=font)
             tw, th = tbox[2] - tbox[0], tbox[3] - tbox[1]
-            pad_x, pad_y = 4, 2
+            pad_x, pad_y_top, pad_y_bottom = 4, 1, 3
             lw = tw + pad_x * 2   # total label width
-            lh = th + pad_y * 2   # total label height
+            lh = th + pad_y_top + pad_y_bottom   # total label height
 
             # Try 2 candidate positions, pick the first non-overlapping one
             candidates = [
                 # (bg_x1, bg_y1) — top-left of the label background
-                (x,                y - lh),          # above, align-left
+                (x,                y - lh - 3),      # above, align-left, 3px clearance
                 (x,                y + 2),           # inside top-left (fallback)
             ]
 
@@ -217,7 +217,7 @@ class SoMMarker:
                 fill=color,
             )
             draw.text(
-                (bg_x1 + pad_x, bg_y1 + pad_y),
+                (bg_x1 + pad_x, bg_y1 + pad_y_top),
                 label,
                 fill="#FFFFFF",
                 font=font,
