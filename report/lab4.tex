@@ -257,17 +257,33 @@ INTERACTIVE_SELECTOR = (
 )
 \end{lstlisting}
 
-对于采用React、Vue等前端框架构建的SPA页面，按钮元素通常为纯\texttt{<div>}或\texttt{<span>}标签，不含任何上述可匹配属性。此时提取模块启动补充扫描：遍历页面所有元素，检测其计算样式中\texttt{cursor}属性是否为\texttt{pointer}，并结合可见文本长度（1--8字符）识别为框架按钮。这一启发式策略能够有效捕获纯div按钮。
+对于采用React、Vue等前端框架构建的SPA页面（如新版QQ邮箱），按钮元素通常为纯\texttt{<div>}或\texttt{<span>}标签，不含任何上述可匹配属性。此时提取模块会遍历页面所有元素，检测其计算样式中\texttt{cursor}属性是否为\texttt{pointer}，并结合可见文本长度（1--8字符）识别为框架按钮。这一策略能够有效捕获纯div按钮。
 
-所有候选元素经过可见性过滤（\texttt{display:none}、\texttt{visibility:hidden}、\texttt{opacity:0}）、尺寸过滤（最小4px²）、交互性过滤（\texttt{disabled}、\texttt{pointer-events:none}）后，按照视觉位置排序并分配连续编号。同时，提取阶段会存储每个候选元素的DOM引用（\_el），供后续\texttt{data-som-id}注入使用。
+所有候选元素经过以下过滤后，按照视觉位置排序并分配编号：
+\begin{itemize}
+    \item \textbf{可见性过滤}：排除\texttt{display:none}、\texttt{visibility:hidden}、\texttt{opacity:0}的元素，这些元素渲染后在视觉上不可见。
+    \item \textbf{尺寸过滤}：排除面积小于4px²的微小元素。
+    \item \textbf{交互性过滤}：排除\texttt{disabled}属性和\texttt{pointer-events:none}样式的不可交互元素。
+\end{itemize}
+
+滤除这些明显不可操作的元素，能够大大减少som标注图片中的视觉干扰，提升VLM的定位准确率。
 
 \paragraph{SoMMarker — 视觉标记绘制}
 
-\texttt{SoMMarker}模块使用PIL（Python Imaging Library）在页面截图上绘制交互元素的视觉标记。为每个候选元素绘制指定颜色的矩形边框（默认线宽2px），并在边框上方或内侧放置带纯色背景的数字标签。标签采用12种高对比度颜色循环分配，相邻元素尽量使用不同颜色以便于区分。当标签因元素密集而可能重叠时，模块自动将标签移至下一个非重叠候选位置（边框上方、边框内侧左上角），确保所有标签清晰可读。
+\texttt{SoMMarker}模块使用PIL（Python Imaging Library）在页面截图上绘制交互元素的视觉标记。为每个候选元素绘制指定颜色的矩形边框，并在边框上方或内侧放置带纯色背景的数字标签。标签采用12种高对比度颜色循环分配，相邻元素尽量使用不同颜色以便于区分。当标签因元素密集而可能重叠时，模块自动将标签移至下一个非重叠候选位置，确保所有标签清晰可读。
+
+例如，bing主页的SoM标记图如图\ref{fig:som_eg}所示：
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{som_eg.png}
+    \caption{SoM标记图示例}
+    \label{fig:som_eg}
+\end{figure}
 
 \paragraph{DOMBridge — 编号到DOM的双向映射}
 
-\texttt{DOMBridge}维护SoM标记编号与DOM元素之间的双向映射关系。每个标记编号被映射至三个关键信息：元素的CSS选择器（用于Playwright定位）、元素的归一化边界框（用于坐标回退点击）以及后端节点ID（用于Mind2Web评测）。在执行阶段，通过\texttt{get\_bbox(id)}可获取指定编号元素的边界框，\texttt{som\_id\_to\_selector(id)}可将编号转换为Playwright定位器，支撑了从VLM文本输出到浏览器操作的完整链路。
+\texttt{DOMBridge}维护SoM标记编号与DOM元素之间的双向映射关系。每个标记编号被映射至三个关键信息：元素的CSS选择器（用于Playwright定位）、元素的边界框（用于坐标回退点击）以及后端节点ID（用于Mind2Web评测）。在执行阶段，通过\texttt{get\_bbox(id)}可获取指定编号元素的边界框，\texttt{som\_id\_to\_selector(id)}可将编号转换为Playwright定位器，从而能够执行点击或输入操作。
 
 \subsubsection{推理阶段（Reason）}
 
@@ -275,19 +291,23 @@ INTERACTIVE_SELECTOR = (
 
 \paragraph{Prompt组装}
 
-\texttt{build\_som\_user\_prompt}函数负责组装user prompt，其结构包括：（1）用户任务描述；（2）当前页面URL与标题；（3）当前计划（从上一步推理输出中提取，帮助模型保持任务连贯性）；（4）最近5步的历史操作记录，以\texttt{[OK]}/\texttt{[NO EFFECT]}/\texttt{[FAIL]}前缀区分执行结果；（5）可交互元素文字列表，每行格式为\texttt{[编号] <标签> "文本内容" aria="无障碍标签"}，供模型与截图中的视觉标记交叉参照；（6）操作指令。完整的prompt由system prompt（包含角色设定、响应格式、可用动作表、规则）与上述user prompt拼接而成。
+\texttt{build\_som\_user\_prompt}函数负责组装user prompt，其结构包含以下部分：
+\begin{itemize}
+    \item \textbf{用户任务描述}：用户的自然语言任务。
+    \item \textbf{当前页面信息}：页面URL与标题。
+    \item \textbf{当前计划}：从上一步推理输出中提取，帮助模型保持任务连贯性。
+    \item \textbf{历史操作记录}：最近5步，以\texttt{[OK]}/\texttt{[NO EFFECT]}/\texttt{[FAIL]}前缀区分执行结果。
+    \item \textbf{可交互元素文字列表}：每行格式为\texttt{[编号] <标签> "文本内容" aria="无障碍标签"}，供模型与截图中的视觉标记交叉参照。
+\end{itemize}
+完整的prompt由上述user prompt与system prompt（包含角色设定、响应格式、可用动作表、规则）拼接而成。
 
 \paragraph{登录与验证码的人机协同机制}
 
 现今大量网页需要进行登录或验证才能体验完整功能，而agent本身难以独立完成验证码识别和登录流程，因此一定场景下，人工的介入是有必要的。
 
-系统采用"自动检测 + VLM视觉判断"双层策略应对登录和验证码场景。程序化检测层在感知阶段运行，通过JavaScript扫描页面DOM中的密码输入框（\texttt{input[type="password"]}）、扫码登录关键词（"微信登录""QQ登录""二维码登录"等），快速识别登录页面。检测到后，Agent直接暂停并通知前端等待人工介入。
+系统采用"自动检测 + VLM视觉判断"双层策略应对登录和验证码场景。程序化检测层在感知阶段运行，通过扫描页面DOM中的密码输入框、扫码登录关键词（"微信登录""QQ登录""二维码登录"等），快速识别登录页面。检测到后，Agent直接暂停并通知前端等待人工介入。
 
-VLM视觉判断层作为补充，通过System Prompt中的\texttt{CAPTCHA / LOGIN — STOP IMMEDIATELY}规则引导：当VLM在截图或元素列表中识别到验证码（滑块、拼图、"安全验证"）、登录表单或扫码界面时，输出\texttt{captcha}或\texttt{login}操作。这两种操作被定义为终端操作（\texttt{is\_terminal=True}），执行后跳过验证阶段，直接进入暂停等待。用户完成登录或验证，点击继续后，Agent重新感知页面并恢复任务循环。
-
-\paragraph{VLM调用与响应解析}
-
-推理模块通过\texttt{ReasonerFactory}根据配置的provider名称（qwen/openai/anthropic/local）创建对应的推理器实例。VLM返回的JSON经\texttt{ActionParser}解析为\texttt{Action}数据类，包含操作类型（\texttt{ActionType}枚举）、目标元素编号和操作值（如待输入文本），交由执行器处理。
+VLM视觉判断层作为补充，当VLM在截图或元素列表中识别到验证码、登录表单或扫码界面时，输出\texttt{captcha}或\texttt{login}操作。这两种操作被定义为终端操作，执行后跳过验证阶段，直接进入暂停等待。用户完成登录或验证，点击继续后，Agent重新感知页面并恢复任务循环。
 
 \subsubsection{执行阶段（Act）}
 
@@ -295,20 +315,21 @@ VLM视觉判断层作为补充，通过System Prompt中的\texttt{CAPTCHA / LOGI
 
 \paragraph{ActionExecutor — 多层回退点击}
 
-\texttt{ActionExecutor}负责执行VLM输出的操作指令。对于CLICK操作，采用4层回退机制以确保最大的执行可靠性：
+\texttt{ActionExecutor}负责执行VLM输出的操作指令。
+
+例如对于CLICK操作，采用3层回退机制以确保最大的执行可靠性：
 
 \begin{enumerate}
-    \item \textbf{Playwright原生点击}：产生浏览器原生事件，最接近真实用户操作，Spa与反爬检测系统无法区分。
-    \item \textbf{JS MouseEvent派发}：通过\texttt{dispatchEvent}派发完整的mousedown/mouseup/click事件序列，同时调用\texttt{el.click()}触发默认行为。
-    \item \textbf{Href导航}：对于\texttt{<a>}标签元素，提取其\texttt{href}属性并通过\texttt{page.goto()}直接导航。此机制专为绕过Bing等网站的点击拦截设计——Bing在搜索结果链接上使用\texttt{preventDefault()}拦截点击事件，直接导航可完全规避该问题。
-    \item \textbf{坐标回退}：通过\texttt{getBoundingClientRect}获取实时元素坐标，滚动至该位置后执行Playwright屏幕坐标点击。
+    \item \textbf{Playwright点击}：产生浏览器原生事件，适用于大多数标准元素。
+    \item \textbf{JS MouseEvent派发}：通过\texttt{dispatchEvent}派发完整的mousedown/mouseup/click事件序列。当Playwright点击无效时，此方法可绕过部分元素的事件拦截。
+    \item \textbf{坐标回退}：通过获取元素坐标，执行Playwright屏幕坐标点击。
 \end{enumerate}
 
 对于TYPE操作，执行器强制要求先通过JS \texttt{focus()}和\texttt{select()}将焦点赋予目标输入框，清除已有内容后再通过Playwright键盘输入新文本。
 
 \paragraph{新标签页检测与同步}
 
-执行CLICK或PRESS操作后，系统检测浏览器上下文中的页面数量变化。若检测到新打开的标签页，自动将当前操作页面切换至最新标签页，并在\texttt{screenshot()}和\texttt{get\_page\_url()}等所有页面访问方法中通过\texttt{context.pages[-1]}确保始终操作最新标签页。
+执行CLICK或PRESS操作后，系统检测浏览器上下文中的页面数量变化。若检测到新打开的标签页，自动将当前操作页面切换至最新标签页，同时更新截图和前端显示，确保Agent始终在最新的页面上下文中进行下一步操作。
 
 \subsubsection{验证阶段（Verify）}
 
@@ -316,11 +337,11 @@ VLM视觉判断层作为补充，通过System Prompt中的\texttt{CAPTCHA / LOGI
 
 \paragraph{全图像素对比}
 
-通过PIL的\texttt{ImageChops.difference}对操作前后的页面截图进行逐像素相减，统计差异像素比例。若差异像素少于$0.05\%$（约460像素），直接判定操作无效，跳过后续验证步骤。该方法采用JPEG格式降低解码延迟，使前端在操作完成后立即看到前后对比截图。
+通过PIL的\texttt{ImageChops.difference}对操作前后的页面截图进行逐像素相减，统计差异像素比例。若差异像素少于$0.05\%$，直接判定操作无效，跳过后续验证步骤。
 
 \paragraph{DOM错误检测}
 
-在像素对比之后（无论其是否触发），通过JavaScript扫描页面DOM中的错误提示元素。检测目标包括：WAI-ARIA标准角色（\texttt{[role="alert"]}、\texttt{[role="alertdialog"]}）、QQ邮箱自定义dialog组件（\texttt{.xmail-ui-dialog}）、通用错误toast和表单验证消息。该方法利用错误提示必然出现在DOM中的特性，以极低成本覆盖了VLM可能遗漏的错误弹窗场景。
+在像素对比之后（无论其是否触发），通过JavaScript扫描页面DOM中的错误提示元素。检测目标包括：WAI-ARIA标准角色（\texttt{[role="alert"]}等）、通用错误toast和表单验证消息。该方法利用错误提示必然出现在DOM中的特性，以极低成本覆盖了VLM可能遗漏的错误弹窗场景。
 
 \paragraph{验证反馈与历史记录}
 
@@ -328,39 +349,33 @@ VLM视觉判断层作为补充，通过System Prompt中的\texttt{CAPTCHA / LOGI
 
 \subsubsection{前端Web交互界面}
 
-前端基于FastAPI WebSocket与纯HTML/CSS/JavaScript构建，采用玻璃态深色主题。核心功能包括任务配置、Agent步骤实时展示、浏览器画面实时流和键鼠交互反馈。
+前端基于FastAPI WebSocket与纯HTML/CSS/JavaScript构建，核心功能包括任务配置、Agent步骤实时展示、浏览器画面实时流和键鼠交互反馈。
 
 \paragraph{实时截图流（CDP Screencast）}
 
-前端通过独立WebSocket通道\texttt{/ws/screencast}接收浏览器实时画面流。后端利用Playwright的Chrome DevTools Protocol（CDP）接口启动\texttt{Page.startScreencast}，以960×540分辨率、约15fps的频率持续截取当前标签页画面，通过专用WebSocket推送至前端渲染到Canvas元素上。该通道与控制消息WebSocket完全分离，避免了高频帧数据阻塞控制消息的传输。
+前端通过独立WebSocket通道接收浏览器实时画面流。后端利用Playwright的CDP接口启动\texttt{Page.startScreencast}，以960×540分辨率、约15fps的频率持续截取当前标签页画面，通过专用WebSocket推送至前端。该通道与控制消息WebSocket完全分离，避免了高频帧数据阻塞控制消息的传输。
 
 Screencast模块在浏览器切换标签页时自动检测并重建CDP会话——当帧超时或会话断开时，通过\texttt{env.get\_cdp\_session()}重新获取新标签页的CDP连接并重启推流，确保实时画面始终跟随Agent当前操作的标签页。
 
 \paragraph{键鼠交互反馈}
 
-前端Canvas元素接收用户的键盘和鼠标事件（click、wheel、keydown等），将事件类型与坐标通过主WebSocket\texttt{/ws/agent}以\texttt{browser\_input}消息发送至后端。后端通过CDP的\texttt{Input.dispatchMouseEvent}、\texttt{Input.dispatchKeyEvent}等接口将用户操作转发至浏览器，实现用户在Web界面上直接操控Agent浏览器窗口的能力。
+前端的实时显示窗口可以直接接收用户的键盘和鼠标事件（click、wheel、keydown等），将事件类型与坐标发送至后端。后端通过CDP的键鼠操作等接口将用户操作转发至浏览器，实现用户在Web界面上直接操控Agent浏览器窗口的能力。
 
 
 \subsection{HTML文本输入模式}
 
-HTML模式是为Mind2Web数据集评测而引入的纯文本输入变体。其设计目标是让同一个Agent框架能够在不依赖截图的情况下，仅通过HTML元素文本列表完成网页操作评估。由于Mind2Web数据集预先标注了每个步骤的正负候选元素及其\texttt{backend\_node\_id}，HTML模式不需要截图和SoM标注，改为直接从数据集读取候选列表并格式化为编号文本供LLM选择。
+SoM视觉模式依赖实时浏览器窗口进行截图和标注，但Mind2Web数据集仅提供预先抓取并清洗的静态HTML快照，无法直接将SoM模式应用于离线评测。
 
-HTML模式与SoM模式共享完全相同的Agent循环和Executor，差异仅在于Perceptor和Prompt。如图\ref{fig:html_mode}所示：
+因此设计了HTML文本输入模式作为纯文本替代方案。该模式直接读取Mind2Web预标注的候选列表并格式化为编号文本供模型选择，完全绕开了截图、渲染和元素映射问题。同一Agent框架仅需替换感知层（\texttt{HTMLPerceptor}替代\texttt{SoMPerceptor}）和微调推理层（文本Prompt替代图像Prompt），执行层和验证层完全复用，即可在离线数据集上验证框架的页面理解与操作决策能力。
 
-\begin{itemize}
-    \item \textbf{感知层}：由\texttt{HTMLPerceptor}替代\texttt{SoMPerceptor}，离线评估时读取Mind2Web候选数据，实时运行时可回退至\texttt{ElementExtractor}提取真实页面元素，同时提取\texttt{body.innerText}作为页面内容摘要供LLM理解当前页面状态。
-    \item \textbf{推理层}：Reasoner自动检测\texttt{perception.screenshot}是否为空，若为空则切换至HTML文本Prompt，将元素列表、页面文本、历史记录和当前计划格式化为纯文本发送给LLM。
-    \item \textbf{验证层}：HTML模式下无截图，验证功能被简化为URL变化检测和DOM错误弹窗扫描。
-\end{itemize}
+如图\ref{fig:html_mode}所示：
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.7\textwidth]{html_mode.png}
+\includegraphics[width=0.6\textwidth]{html_mode.png}
 \caption{SoM模式与HTML模式的架构对比}
 \label{fig:html_mode}
 \end{figure}
-
-HTML模式无需额外开发，仅需替换Perceptor和Prompt即可从视觉输入切换为文本输入，有效降低了为不同数据集定制评测流程的成本。
 
 \section{实验评测与分析}
 针对项目模型的SoM输入与HTML输入模式分别设计了评测实验。所有本地模型均在一台RTX 3090 24GB $\times 1$，内存60GB的计算机上运行，并使用Qwen 3VL-8B-Instruct作为本地测试模型,使用API调用Qwen3.7-max测试。

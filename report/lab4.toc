@@ -10,23 +10,22 @@
 \contentsline {subsubsection}{\numberline {1.1}感知阶段（Perceive）}{5}{subsubsection.3.1.1}%
 \contentsline {paragraph}{ElementExtractor — 可交互元素提取}{5}{paragraph*.4}%
 \contentsline {paragraph}{SoMMarker — 视觉标记绘制}{6}{paragraph*.5}%
-\contentsline {paragraph}{DOMBridge — 编号到DOM的双向映射}{6}{paragraph*.6}%
+\contentsline {paragraph}{DOMBridge — 编号到DOM的双向映射}{7}{paragraph*.7}%
 \contentsline {subsubsection}{\numberline {1.2}推理阶段（Reason）}{7}{subsubsection.3.1.2}%
-\contentsline {paragraph}{Prompt组装}{7}{paragraph*.7}%
-\contentsline {paragraph}{登录与验证码的人机协同机制}{7}{paragraph*.8}%
-\contentsline {paragraph}{VLM调用与响应解析}{7}{paragraph*.9}%
+\contentsline {paragraph}{Prompt组装}{7}{paragraph*.8}%
+\contentsline {paragraph}{登录与验证码的人机协同机制}{8}{paragraph*.9}%
 \contentsline {subsubsection}{\numberline {1.3}执行阶段（Act）}{8}{subsubsection.3.1.3}%
 \contentsline {paragraph}{ActionExecutor — 多层回退点击}{8}{paragraph*.10}%
-\contentsline {paragraph}{新标签页检测与同步}{8}{paragraph*.11}%
-\contentsline {subsubsection}{\numberline {1.4}验证阶段（Verify）}{8}{subsubsection.3.1.4}%
-\contentsline {paragraph}{全图像素对比}{8}{paragraph*.12}%
+\contentsline {paragraph}{新标签页检测与同步}{9}{paragraph*.11}%
+\contentsline {subsubsection}{\numberline {1.4}验证阶段（Verify）}{9}{subsubsection.3.1.4}%
+\contentsline {paragraph}{全图像素对比}{9}{paragraph*.12}%
 \contentsline {paragraph}{DOM错误检测}{9}{paragraph*.13}%
 \contentsline {paragraph}{验证反馈与历史记录}{9}{paragraph*.14}%
 \contentsline {subsubsection}{\numberline {1.5}前端Web交互界面}{9}{subsubsection.3.1.5}%
 \contentsline {paragraph}{实时截图流（CDP Screencast）}{9}{paragraph*.15}%
-\contentsline {paragraph}{键鼠交互反馈}{9}{paragraph*.16}%
+\contentsline {paragraph}{键鼠交互反馈}{10}{paragraph*.16}%
 \contentsline {subsection}{\numberline {2}HTML文本输入模式}{10}{subsection.3.2}%
 \contentsline {section}{\numberline {四}实验评测与分析}{11}{section.4}%
-\contentsline {subsection}{\numberline {1}HTML输入模式下的性能测评}{12}{subsection.4.1}%
-\contentsline {subsection}{\numberline {2}SoM输入模式下的性能测评}{13}{subsection.4.2}%
-\contentsline {section}{\numberline {五}参考文献}{14}{section.5}%
+\contentsline {subsection}{\numberline {1}HTML输入模式下的性能测评}{11}{subsection.4.1}%
+\contentsline {subsection}{\numberline {2}SoM输入模式下的性能测评}{12}{subsection.4.2}%
+\contentsline {section}{\numberline {五}参考文献}{13}{section.5}%
