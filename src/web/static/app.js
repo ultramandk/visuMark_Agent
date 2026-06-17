@@ -1179,7 +1179,7 @@ btnNewTask.addEventListener("click", () => {
                 <button class="example-chip" data-task="华南理工大学有哪些王牌专业" data-url="https://www.bing.com">🏫 华工王牌专业</button>
                 <button class="example-chip" data-task="打开淘宝搜索机械键盘并告诉我前三名的价格" data-url="https://www.bing.com">🛒 淘宝搜索机械键盘</button>
                 <button class="example-chip" data-task="2026年世界杯在哪个国家举办" data-url="https://www.bing.com">⚽ 2026世界杯举办地</button>
-                <button class="example-chip" data-task="B站番剧排行榜第一名是什么" data-url="https://www.bing.com">📺 B站番剧排行榜</button>
+                <button class="example-chip" data-task="B站番剧 追番人数最多第一名是什么，返回名字和封面" data-url="https://www.bilibili.com">📺 B站番剧排行榜</button>
                 <button class="example-chip" data-task="最新的特斯拉Model 3价格是多少" data-url="https://www.bing.com">🚗 特斯拉Model 3价格</button>
                 <button class="example-chip" data-task="翻译 'Hello World' 到中文" data-url="https://fanyi.baidu.com">🌐 百度翻译</button>
                 <button class="example-chip" data-task="搜索从深圳北到广州南的高铁，告诉我最早一班的时间" data-url="https://www.baidu.com">🚄 高铁最早班次</button>

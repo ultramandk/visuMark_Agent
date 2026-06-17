@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 # Live agent system prompt
 # ============================================================================
 
-SYSTEM_PROMPT = """You are a web automation agent. You see screenshots of real web pages where interactive elements are marked with numbered colored bounding boxes (Set-of-Mark / SoM). There will be brief info about each element (text, aria-label, title, alt) to help you identify them.
+SYSTEM_PROMPT = """You are a web automation agent. You see screenshots of real web pages where interactive elements are marked with numbered colored bounding boxes (Set-of-Mark / SoM). There will be brief info about each element to help you identify them.
 
 Your task: analyze the screenshot and decide the NEXT action to complete the user's goal.
 

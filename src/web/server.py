@@ -144,6 +144,7 @@ def _encode_screenshot_jpeg(png_bytes: bytes, quality: int = 70) -> str:
 # ---------------------------------------------------------------------------
 _screencast_env: "LiveEnvironment | None" = None
 _screencast_cdp = None
+_screencast_restart = asyncio.Event()  # Agent signals when tab switched
 
 # ---------------------------------------------------------------------------
 # WebSocket — Screencast Stream (separate channel, no congestion)
@@ -198,7 +199,22 @@ async def ws_screencast(ws: WebSocket):
 
         while not disconnected.is_set():
             try:
-                frame = await asyncio.wait_for(frame_queue.get(), timeout=1.0)
+                # Wait for next frame OR tab-switch signal (whichever first)
+                get_frame = asyncio.create_task(frame_queue.get())
+                restart_signal = asyncio.create_task(_screencast_restart.wait())
+                done, _ = await asyncio.wait(
+                    [get_frame, restart_signal], timeout=1.0,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                # Clean up pending tasks
+                for t in [get_frame, restart_signal]:
+                    if not t.done():
+                        t.cancel()
+                if restart_signal in done:
+                    _screencast_restart.clear()
+                    raise asyncio.TimeoutError  # trigger restart below
+                if get_frame in done:
+                    frame = get_frame.result()
                 await ws.send_json({
                     "type": "screencast_frame",
                     "data": frame["data"],
@@ -253,6 +269,42 @@ async def ws_screencast(ws: WebSocket):
             pass
         logger.info("Screencast WebSocket closed")
 
+
+async def _forward_browser_input(inp: dict) -> None:
+    """Forward keyboard/mouse events from frontend to browser via CDP."""
+    global _screencast_cdp
+    if _screencast_cdp is None:
+        return
+    try:
+        kind = inp.get("kind", "")
+        if kind == "mouse":
+            await _screencast_cdp.send("Input.dispatchMouseEvent", {
+                "type": inp.get("mouseType", "mouseMoved"),
+                "x": float(inp.get("x", 0)),
+                "y": float(inp.get("y", 0)),
+                "button": inp.get("button", "left"),
+                "clickCount": int(inp.get("clickCount", 1)),
+                "modifiers": int(inp.get("modifiers", 0)),
+            })
+        elif kind == "key":
+            await _screencast_cdp.send("Input.dispatchKeyEvent", {
+                "type": inp.get("keyType", "keyDown"),
+                "key": str(inp.get("key", "")),
+                "code": str(inp.get("code", "")),
+                "text": str(inp.get("text", "")),
+                "modifiers": int(inp.get("modifiers", 0)),
+                "windowsVirtualKeyCode": int(inp.get("windowsVirtualKeyCode", 0)),
+            })
+        elif kind == "wheel":
+            await _screencast_cdp.send("Input.dispatchMouseEvent", {
+                "type": "mouseWheel",
+                "x": float(inp.get("x", 0)),
+                "y": float(inp.get("y", 0)),
+                "deltaX": float(inp.get("deltaX", 0)),
+                "deltaY": float(inp.get("deltaY", 0)),
+            })
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # WebSocket — Agent Runner
@@ -399,6 +451,7 @@ async def ws_agent(ws: WebSocket):
 
         async def on_post_action(self, step: int, post_screenshot: bytes) -> None:
             b64 = _encode_screenshot_jpeg(post_screenshot) if post_screenshot else None
+            _screencast_restart.set()  # Signal screencast to follow new tab
             await self._safe_send({
                 "type": "step_phase",
                 "step": step,
@@ -492,13 +545,16 @@ async def ws_agent(ws: WebSocket):
     )
 
     async def listen_for_messages():
-        """Background task: listen for 'continue' from client."""
+        """Background task: listen for 'continue' and 'browser_input' from client."""
         while not ws_disconnected.is_set():
             try:
                 raw = await ws.receive_text()
                 msg = json.loads(raw)
-                if msg.get("type") == "continue":
+                msg_type = msg.get("type", "")
+                if msg_type == "continue":
                     agent.resume()
+                elif msg_type == "browser_input":
+                    await _forward_browser_input(msg.get("input", {}))
             except WebSocketDisconnect:
                 ws_disconnected.set()
                 if agent_task and not agent_task.done():
