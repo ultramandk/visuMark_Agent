@@ -451,6 +451,232 @@ Qwen 3VL-8B & 73.3 & 10.5 & 40.0 & 6.8 \\
 
 总体而言，SoM输入模式以更多的操作步数为代价，换取了更高的任务完成率与更广泛的任务适用性，在真实网页场景下优于HTML文本输入模式。
 
+\section{错误分析与AGI局限性讨论}
+
+前文的实验评测揭示了当前VLM驱动的Web Agent在真实网页场景中的多项性能瓶颈。本节通过对典型错误案例的深入分析，建立系统性的错误分类体系，并在此基础上讨论当前AGI技术在Web Agent领域的能力边界与根本性局限。
+
+\subsection{典型错误案例分析}
+
+为深入理解Agent的失败模式，我们从Mind2Web数据集评测和自建SoM测试集中选取了具有代表性的错误案例进行分析。每个案例展示了Agent在某类典型场景下的失败过程与根因。
+
+\subsubsection{案例一：密集布局下的元素定位错误}
+
+\textbf{任务场景}：在B站首页的分区选择页面中，Agent需要点击"影视"分区按钮进入对应分区。该页面分类标签密集排列，且页面中央同时弹出了活动推广弹窗，弹窗的半透明边框与分区按钮的SoM标记在视觉上高度重叠。
+
+\textbf{Agent行为}：VLM在SoM标注截图中将第\#91号元素（影视分区按钮）与第\#57号元素（弹窗的半透明边框区域）混淆，错误地输出了 \texttt{CLICK \#57}。点击弹窗边框后页面未跳转至影视分区，Agent继续在错误页面上执行后续操作，最终任务失败。
+
+\textbf{根因分析}：在密集、重复的UI布局中，SoM标记的边界框可能部分重叠（特别是当元素间距小于8px时），导致VLM无法准确区分相邻编号。此外，相邻元素的文字标签无法提供有效的语义区分，VLM仅凭视觉位置信息难以做出精确判断。该问题在Mind2Web Cross-Task评测中尤为突出——Qwen3-VL-8B的元素准确率仅41.9\%，意味着近六成的步骤中模型选择了错误的页面元素。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/som_march_error.png}
+    \caption{密集布局下的元素定位错误示例}
+    \label{fig:error_dense}
+\end{figure}
+
+\subsubsection{案例二：操作执行失败——SoM标记与实际DOM元素不一致}
+
+\textbf{任务场景}：在某饰品交易网站首页，Agent需要点击"饰品市场"入口按钮进入商品列表页。SoM标注将该按钮标为\#2号元素。
+
+\textbf{Agent行为}：VLM正确识别了目标按钮（输出 \texttt{CLICK \#2}），Playwright原生点击和JS MouseEvent派发均未能触发页面跳转，href导航因该按钮为\texttt{<div>}标签（非\texttt{<a>}标签）而无法提取链接，坐标回退点击也因页面动态加载导致元素位置偏移而失败。4层回退机制全部耗尽后，Agent在下一步中重复尝试同一元素，陷入循环直至超时。
+
+\textbf{根因分析}：该案例暴露了两层问题。第一层是执行层面：现代前端框架中的\texttt{<div>}按钮缺乏原生交互语义，其点击行为完全依赖框架的事件委托机制——仅在特定DOM子树中监听事件并内部路由。即使Playwright触发了完整的MouseEvent序列，框架的路由逻辑可能因事件\texttt{isTrusted}属性、事件传播路径差异或组件内部状态而拒绝响应。第二层是Agent推理层面：Agent缺乏对"点击后页面应如何变化"的预期模型，因此在操作无响应时无法判断是"元素不对""方式不对"还是"页面卡顿需等待"，只能盲目重试。该问题对应错误分类体系中的第8类（点击/输入执行失败），估计占总失败步骤的约10\%。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/search_error.png}
+    \caption{CLICK操作执行失败示例}
+    \label{fig:error_exec_fail}
+\end{figure}
+
+\subsubsection{案例三：操作值不完整——文本截断与格式偏差}
+
+\textbf{任务场景}：在邮件编辑页面，Agent需要向收件人字段输入邮箱地址 \texttt{"739862481@qq.com"}。
+
+\textbf{Agent行为}：VLM输出了 \texttt{TYPE \#2 "739862481@qq.co端午安康"}，邮箱地址的域名部分被截断，同时将邮件正文的主题文本错误地写入了收件人字段。
+
+\textbf{根因分析}：VLM在处理长文本任务描述时存在"注意力衰减"现象——模型倾向于提取任务描述的前几个词作为操作值，而忽略后续的关键限定词。在Mind2Web的TYPE操作评测中，实际操作值的token-level F1分数反映了这一问题的严重程度：操作值越长、信息密度越高，模型输出的完整性就越差。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{figures/error_truncation.png}
+    \caption{操作值截断错误示例}
+    \label{fig:error_truncation}
+\end{figure}
+
+\subsubsection{案例四：操作无效——页面状态已达目标但Agent继续操作}
+
+\textbf{任务场景}：在比较茅台与腾讯股价涨幅的任务中，Agent已成功打开茅台股价信息页面，但未能识别到当前页面即为目标页面，继续执行多余的搜索操作。
+
+\textbf{Agent行为}：VLM未能识别到答案已在当前页面可见（搜索框下方已展示茅台股价卡片），而是继续滚动页面、点击无关元素，直至消耗全部30步配额后以失败告终。验证阶段的像素对比虽检测到截图变化，但均为无效的滚动和探索性操作。
+
+\textbf{根因分析}：该案例暴露了VLM在"答案识别"与"任务终止判断"上的核心弱点。尽管System Prompt明确要求"一旦看到答案立即输出answer"，VLM在实际推理中容易陷入"继续探索"的行为模式，尤其在于：（1）页面信息密度高、目标答案在视觉上不够突出时；（2）任务描述中包含多个子目标时，模型可能完成了一个子目标后继续探索其他子目标；（3）VLM缺乏对"已获取足够信息"的元认知判断能力。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/error_no_effect.png}
+    \caption{操作无效错误示例}
+    \label{fig:error_no_effect}
+\end{figure}
+
+\subsubsection{案例五：跨域泛化失败——HTML模式下模型对新网站布局无知}
+
+\textbf{任务场景}：Mind2Web Cross-Domain评测中，Agent需要在训练数据中未见过的网站类型上完成任务。
+
+\textbf{Agent行为}：以Qwen3-VL-8B为例，在Cross-Task上的Step SR为33.9\%，但在Cross-Domain上降至28.0\%。面对全新的网站布局和DOM结构，模型在候选元素排序（BERT阶段）表现下降，即便候选列表包含正确元素，VLM也倾向于选择网站中更"常见"的非目标元素（如导航栏中的链接、搜索框）。
+
+\textbf{根因分析}：BERT排序器（all-MiniLM-L6-v2）的嵌入空间对通用语义敏感但对特定网站的DOM结构语义不敏感。当新网站的HTML结构与训练分布差异较大时，正确元素的候选排名可能靠后，影响VLM的最终选择。同时，VLM本身对新类型网页的"界面直觉"较弱，在缺乏足够的上下文示例时，偏向于选择高可见度、高频率的交互元素（如页面顶部的导航链接）。
+
+\subsection{错误分类体系}
+
+基于上述案例分析和评测数据，我们将Web Agent的失败模式归纳为四个层次、十个类别的系统化错误分类体系。该分类覆盖了从感知输入到任务完成的完整链路。
+
+\begin{table}[H]
+\centering
+\small
+\caption{Web Agent错误分类体系}
+\label{tab:error_taxonomy}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{c|p{5cm}|p{4.5cm}|c}
+\toprule
+\textbf{层次} & \textbf{错误类别} & \textbf{典型表现} & \textbf{估计占比} \\
+\midrule
+\multirow{3}{*}{感知层}
+    & 1. 元素漏检 & 可交互元素未被CSS选择器或启发式策略覆盖 & $\sim$8\% \\
+    & 2. SoM标记冲突 & 密集布局中边界框重叠，标签相互遮挡 & $\sim$5\% \\
+    & 3. 页面加载不完整 & 异步内容未渲染完成即截取，SoM标注缺元素 & $\sim$3\% \\
+\midrule
+\multirow{4}{*}{推理层}
+    & 4. 元素选择错误 & VLM选错元素编号（最常见错误类型） & $\sim$35\% \\
+    & 5. 操作类型错误 & CLICK/TYPE/SELECT混淆或冗余步骤 & $\sim$12\% \\
+    & 6. 操作值偏差 & TYPE/SELECT值不完整、多余空格或格式错误 & $\sim$10\% \\
+    & 7. 任务终止误判 & 过早Answer（信息不完整）或过晚Answer（额外探索） & $\sim$8\% \\
+\midrule
+\multirow{2}{*}{执行层}
+    & 8. 点击/输入执行失败 & 4层回退全部耗尽：元素不可见、iframe限制、反爬拦截 & $\sim$10\% \\
+    & 9. 页面跳转异常 & 新标签页未正确切换、URL导航超时 & $\sim$5\% \\
+\midrule
+验证层 & 10. 验证误判 & 像素对比假阳性（广告轮播等动态内容）或假阴性（微小但有效的DOM变化） & $\sim$4\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{感知层错误}发生于Agent对网页状态进行建模之前，直接影响后续推理的输入质量。元素漏检主要源于现代前端框架（React、Vue）中大量使用无语义的\texttt{<div>}/\texttt{<span>}标签替代原生HTML交互元素，CSS选择器和启发式\texttt{cursor:pointer}检测虽能覆盖大部分场景，但对完全自定义的事件委托模式（如在整个容器上监听click事件并内部路由）仍存在漏检。SoM标记冲突在元素密度超过每平方厘米3个时显著增加，此时标签文字和边框的重叠使得VLM无法可靠地分辨相邻元素。
+
+\textbf{推理层错误}是占比最高的错误来源（合计约65\%），集中体现了当前VLM在网页任务理解上的核心瓶颈。元素选择错误（约35\%）是所有错误中占比最高的单一类别：Mind2Web Cross-Task上Qwen3-VL-8B仅41.9\%的元素准确率即说明近六成步骤中模型未能选择正确元素。操作类型与操作值的偏差进一步降低了Step SR至33.9\%。任务终止误判在SoM模式下尤其突出——模型在复杂多步任务中缺乏对"任务完成度"的准确评估能力。
+
+\textbf{执行层错误}发生于VLM已做出正确决策但浏览器操作无法完成的场景。值得注意的是，本系统的4层点击回退机制（Playwright原生→JS事件派发→href导航→坐标点击）已覆盖大多数执行异常，使执行层错误占比控制在约15\%。但在跨域iframe（如QQ邮箱的撰写页面嵌入独立域的iframe）和激进的反爬机制（如Bing的\texttt{preventDefault()}拦截）场景下，执行仍可能失败。
+
+\textbf{验证层错误}占比最低（约4\%），主要挑战在于区分"有效的页面变化"与"无意义的动态内容"。广告轮播、实时数据更新、动画效果均会导致像素级变化，但并非Agent操作的结果。DOM错误检测作为补充机制能覆盖大部分弹窗错误，但对非DOM形式的错误提示（如Canvas渲染的toast）无法捕获。
+
+\begin{figure}[H]
+    \centering
+    % 预留：错误分布饼图/柱状图
+    \includegraphics[width=0.8\textwidth]{figures/error_distribution.png}
+    \caption{错误类别分布统计}
+    \label{fig:error_dist}
+\end{figure}
+
+\subsection{AGI局限性讨论}
+
+上述错误分析不仅揭示了当前Web Agent系统的工程改进方向，更指向了当前AGI（通用人工智能）技术在真实场景中面临的若干根本性局限。本小节从六个维度进行系统讨论。
+
+\subsubsection{视觉理解 $\neq$ 语义理解}
+
+当前VLM（包括表现最好的Qwen3.7-max）对网页截图的理解本质上是模式匹配而非语义理解。模型通过大规模预训练学习了像素模式与文本之间的统计关联，但缺乏对UI元素的"功能性理解"。具体表现为：模型可以在一张包含搜索按钮的截图中识别出"这是一个搜索按钮"，但该识别依赖于视觉特征（按钮形状、颜色、文字标签）与训练数据中相似模式的匹配。当面对全新的、与训练分布差异较大的UI设计时（如非标准控件、定制化组件），模型的识别准确率显著下降。这种"见多识广但未真正理解"的特性是当前视觉语言模型的根本局限。
+
+证据来自实验数据：SoM模式下任务成功率$73.3\%$相比HTML模式下$40.0\%$（纯文本，无视觉信息）的$83.3\%$提升表明视觉信息至关重要，但仍有$26.7\%$的任务即使在视觉信息充分的情况下也无法完成，说明"看得到"不等于"看得懂"。
+
+\subsubsection{缺乏真实世界知识与常识推理}
+
+VLM的知识全部来源于训练数据中的文本和图像，缺乏对真实世界的因果理解和常识推理能力。在Web Agent场景中，这表现为：
+\begin{itemize}
+    \item \textbf{网站行为常识缺乏}：人类知道"点击商品图片通常会进入详情页""购物车图标通常在页面右上角"，这些常识来自大量浏览经验。VLM虽然可能在训练数据中间接学习到部分模式，但缺乏系统性的、可泛化的网站交互常识。
+    \item \textbf{任务语义理解浅层化}：当任务要求"找到最便宜的手机并截图"时，人类会自然地比较多个商品的价格数值并选择最小值，而VLM倾向于选择第一个被标记的价格元素即输出answer，缺乏"比较—选择"的深层推理链路。
+    \item \textbf{错误恢复缺乏因果推理}：当Agent连续两次操作无效时，VLM被prompt引导"尝试完全不同的策略"，但模型并不真正理解为什么前两次操作失败了（是因为元素不可交互、页面未加载完成、还是目标根本不在当前页面），因此"不同的策略"本质上仍是随机的探索。
+\end{itemize}
+
+\subsubsection{跨域泛化能力不足}
+
+Mind2Web评测的三个维度（Cross-Task/Cross-Website/Cross-Domain）构成了一条泛化难度递增的曲线。Qwen3-VL-8B从Cross-Task的33.9\% Step SR下降至Cross-Domain的28.0\%，降幅达17.4\%。Qwen3.7-max同样从52.0\%下降至43.8\%。这一趋势清晰表明：模型在训练数据中见过的网站类型越多，对未见网站的泛化就越困难。
+
+泛化能力不足的根源在于：当前VLM本质上是"插值"模型而非"外推"模型。模型在训练数据的分布范围内表现良好（插值），但面对分布外的新网站结构和交互模式时性能下降（外推失败）。这对AGI提出了一个关键问题：真正的通用智能需要在极少甚至零示例的情况下理解新环境的结构和交互规则，而当前基于统计学习的范式尚不具备该能力。
+
+\subsubsection{多步推理与长期规划能力薄弱}
+
+Web Agent的任务本质上是序列决策问题——Agent需要在部分可观测的环境中执行一系列操作以达到目标状态。实验数据揭示了当前模型在长期规划上的明显不足：
+\begin{itemize}
+    \item \textbf{规划视野短}：SoM模式下成功任务的平均步数为10.5步，但Agent在每一步的推理均以"当前页面看到什么→下一步做什么"为主，缺乏超过2-3步的前瞻性规划。当任务需要先导航到特定页面、再填写表单、最后提交的多阶段流程时，模型容易在阶段转换处迷失。
+    \item \textbf{回溯能力缺失}：当Agent发现自己走错路径（如点击了错误的链接进入了无关页面），虽然prompt中提供了GOTO回退和Escape关闭弹窗的指令，但模型缺乏系统性的"状态评估→识别错误→制定恢复计划→执行恢复"能力，更多依赖prompt中的启发式规则。
+    \item \textbf{探索-利用平衡差}：SoM模式平均步数（10.5步）显著高于HTML模式（6.8步），部分原因是模型在视觉模式下倾向于进行大量探索性操作（滚动、悬停、点击不同元素查看反应），缺乏高效的探索策略。
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/agi_planning_gap.png}
+    \caption{人类与Agent的多步推理路径对比}
+    \label{fig:agi_planning}
+\end{figure}
+
+\subsubsection{缺乏持续学习与记忆机制}
+
+当前的Agent系统对每个任务都从零开始——没有记忆、没有经验积累、无法从之前的错误中学习。在同一测试集上重复运行10次同一任务，Agent的失败模式高度一致，说明模型无法通过"试错"来改进策略。这与人类使用浏览器的模式形成鲜明对比：人类会记住常用网站的结构、积累操作经验、在不同网站间迁移相似的交互模式。
+
+从AGI的角度看，持续学习（continual learning）和情景记忆（episodic memory）是实现通用智能的关键缺失组件。具体到Web Agent场景，理想的能力包括：
+\begin{itemize}
+    \item 记住特定网站的操作模式（如"QQ邮箱的撰写按钮在左侧导航栏"）
+    \item 从失败中学习并避免重复相同的错误操作
+    \item 将在网站A学到的交互模式迁移至结构相似的网站B
+    \item 跨任务积累通用的网页操作策略
+\end{itemize}
+
+\subsubsection{效率与可靠性的根本矛盾}
+
+在SoM自建测试集的30个任务中，平均完成步数10.5步、每步约8秒（含VLM推理3-5秒、页面加载2-3秒），总耗时约84秒/任务。人类完成相同任务的平均步数约为3-4步、每步约3秒，总耗时约12秒。效率差距约为7倍。
+
+更重要的是，可靠性（73.3\%的任务成功率）与效率之间存在根本性矛盾：可以通过增加重试次数、降低操作节奏、增加验证步骤来提高可靠性，但会进一步降低效率；反之，减少验证和重试虽能提升速度，但错误率将显著上升。这一矛盾在当前VLM的推理范式下难以根本解决，因为模型缺乏"一次性做对"所需的深层理解和鲁棒推理能力。
+
+\subsubsection{小结：从Web Agent看AGI的能力缺口}
+
+\begin{table}[H]
+\centering
+\small
+\caption{AGI核心能力在Web Agent场景中的缺口分析}
+\label{tab:agi_gap}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{p{2.8cm}|p{3.5cm}|p{3.5cm}|p{3.5cm}}
+\toprule
+\textbf{能力维度} & \textbf{理想AGI表现} & \textbf{当前VLM实际表现} & \textbf{缺口程度} \\
+\midrule
+视觉理解 & 理解UI元素的\textit{功能}与\textit{意图} & 基于视觉特征的模式匹配，缺乏功能语义 & 大 \\
+\hline
+常识推理 & 利用真实世界知识辅助决策 & 仅依赖训练数据中的统计关联 & 大 \\
+\hline
+跨域泛化 & 零样本适应全新环境 & Cross-Domain Step SR下降17-20\% & 中-大 \\
+\hline
+长期规划 & 多步前瞻+回溯+动态调整 & 单步贪心决策为主，缺乏全局规划 & 大 \\
+\hline
+持续学习 & 从经验中学习并改进策略 & 每次任务独立执行，无记忆迁移 & 极大 \\
+\hline
+元认知 & 准确评估自身能力边界与不确定性 & 缺乏对"知道什么/不知道什么"的判断 & 极大 \\
+\hline
+效率 & 快速、准确地一次性完成任务 & 需要多步探索，成功率有限 & 中 \\
+\hline
+鲁棒性 & 在异常情况下优雅降级 & 遇到意外页面状态时易陷入循环或失败 & 大 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+综合来看，当前VLM驱动的Web Agent在特定任务类型（简单搜索、表单填写）和特定网站（常见主流网站）上已展现出实用价值。然而，距离真正意义上的"通用网页智能体"，仍需在多模态理解深度、常识推理、长期规划、持续学习和元认知等维度取得根本性突破。这些维度不仅适用于Web Agent场景，也构成了当前AGI研究的核心挑战。
+
+\begin{figure}[H]
+    \centering
+    % 预留：AGI能力雷达图
+    \includegraphics[width=0.7\textwidth]{figures/agi_radar.png}
+    \caption{AGI核心能力缺口雷达图}
+    \label{fig:agi_radar}
+\end{figure}
+
 \section{参考文献}
 \begin{thebibliography}{99}
 \bibitem{webvoyager} He, Y., et al. “WebVoyager: Building an End-to-End Web Agent with Large Multimodal Models.” 10.48550/arXiv.2401.13919
